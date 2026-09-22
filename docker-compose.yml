@@ -1,0 +1,28 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: search-es
+    environment:
+      - discovery.type=single-node          # one node, no cluster
+      - xpack.security.enabled=false        # no auth/TLS for local dev
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g          # cap memory at 1 GB
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
+      interval: 10s
+      retries: 12
+
+  redis:
+    image: redis/redis-stack-server:latest  # Redis + vector search (for the semantic cache later)
+    container_name: search-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  es_data:
+  redis_data:

@@ -5,10 +5,21 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "elasticsearch>=9.5.1",
+    "defusedxml>=0.7.1",
+    "elasticsearch>=8,<9",
     "fastapi>=0.141.1",
     "pydantic-settings>=2.15.0",
+    "pymupdf>=1.28.2",
     "redis>=8.1.0",
     "sentence-transformers>=6.1.0",
     "uvicorn>=0.53.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
