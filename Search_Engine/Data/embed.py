@@ -1,17 +1,22 @@
 """TEXT EMBEDDINGS."""
 
 import numpy as np
+from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 
 from Search_Engine.Schema.chunk import Chunk
 
 
-class TextEmbedder:
-    """Sentence-transformers model, loaded on first use (loading takes a few seconds)."""
+class TextEmbedder(Embeddings):
+    """Sentence-transformers model, loaded on first use (loading takes a few seconds).
 
-    def __init__(self, model_name: str, batch_size: int = 32):
+    Also a LangChain `Embeddings`, so SemanticChunker reuses this model instead of loading a second copy.
+    """
+
+    def __init__(self, model_name: str, batch_size: int = 32, query_instruction: str = ""):
         self.model_name = model_name
         self.batch_size = batch_size
+        self.query_instruction = query_instruction  # BGE models expect this prefix on search queries only
         self._model: SentenceTransformer | None = None
 
     @property
@@ -41,3 +46,10 @@ class TextEmbedder:
         for chunk, vector in zip(chunks, vectors, strict=True):
             chunk.text_embedding = vector.tolist()
         return chunks
+
+    # LangChain Embeddings interface
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed(texts).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([self.query_instruction + text])[0].tolist()

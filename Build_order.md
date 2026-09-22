@@ -66,9 +66,10 @@ Text Embeddings, Metadata Enrichment, Vector Database.*
 5. `Data/enrichment.py`: **Metadata Enrichment**. Runs *after* embedding, as in the diagram: source, file type,
    modality, page, dates, title/section, and optionally LLM-generated keywords/summary. Metadata Filtering in
    Phase 2 depends on these fields.
-6. `Data/index.py`: **Vector Database**. An ES index with a `text` field (BM25), a `text_embedding` `dense_vector`,
-   an `image_embedding` `dense_vector` (filled in Phase 3) and keyword metadata fields. The diagram feeds this
-   database into Elasticsearch Hybrid Search, so the ES index is the vector database.
+6. `Data/index.py`: **Vector Database**. LangChain's `ElasticsearchStore` over one ES index: a `text` field (BM25,
+   English analyzer), a `text_embedding` `dense_vector` and typed `metadata.*` fields. The diagram feeds this
+   database into Elasticsearch Hybrid Search, so the ES index is the vector database. The `image_embedding`
+   field is added to the mapping in Phase 3.
 
 **Done when:** you can ingest a folder of txt/pdf/xml/csv/json files and see enriched, embedded chunks in ES.
 
@@ -81,11 +82,14 @@ Diagram boxes: *USER → QUERY, Query Enhancement, Metadata Filtering, Elasticse
 2. `Retrieval/query_enhance.py`: **Query Enhancement** (LLM rewrite, expansion, or HyDE).
 3. `Retrieval/filters.py`: **Metadata Filtering**. Turns the query or user options into ES `filter` clauses on the
    fields from Metadata Enrichment.
-4. `Retrieval/search.py`: **Elasticsearch Hybrid Search**. Two sub-searches, as in the diagram:
-   - **Keyword Search (BM25)** on `text`
-   - **Semantic Search**, kNN on `text_embedding`
-5. `Retrieval/rerank.py`: **Reranking**. First **Rank Fusion** (RRF) of the BM25 and semantic lists, then a
-   **Cross Encoder** (e.g. `BAAI/bge-reranker-base`) over the fused top-N.
+4. `Retrieval/search.py`: **Elasticsearch Hybrid Search** through LangChain's `ElasticsearchStore`. Two sub-searches,
+   as in the diagram:
+   - **Keyword Search (BM25)** on `text` (`BM25Strategy`)
+   - **Semantic Search**, kNN on `text_embedding` (`DenseVectorStrategy`)
+   - Elasticsearch's built-in RRF needs a paid license (the local basic license returns 403), so the two lists
+     are fused in the next step. LangChain's hybrid mode also returns no scores.
+5. `Retrieval/rerank.py`: **Reranking**. First **Rank Fusion** (RRF, in our code) of the BM25 and semantic lists,
+   then a **Cross Encoder** (e.g. `BAAI/bge-reranker-base`) over the fused top-N.
 6. `Agent/llm.py`: a basic LLM call with the reranked chunks as context (the full LLM architecture comes in Phase 4).
 7. `Search_Engine/api/app.py`: FastAPI `/search` endpoint, so USER → QUERY → answer works end to end.
 8. `eval/`: 20–30 questions with known answers to measure recall@k and MRR while tuning this phase
@@ -103,7 +107,8 @@ Extract Audio & Convert to Text, Takes pictures frame by frame temporarily.*
    - tables → serialized to text (markdown) → Chunking
    - **charts, images from the PDFs → PICTURES** (the arrow in the diagram)
 2. `Data/image_embed.py`: **PICTURES → Image Embeddings (CLIP)** → Metadata Enrichment → Vector Database
-   (`image_embedding` field).
+   (add an `image_embedding` `dense_vector` to the existing mapping with `put_mapping`, and write to it with a
+   second `ElasticsearchStore` whose `vector_query_field="image_embedding"`).
 3. `Data/loaders/video.py`: **VIDEO** splits two ways:
    - **Extract Audio & Convert to Text** (ffmpeg + Whisper) → the transcript joins **Text Extraction**, then the normal text path
    - **Takes pictures frame by frame, temporarily** (keyframe sampling to a temp dir) → **PICTURES** → CLIP;
@@ -179,8 +184,8 @@ Extract Audio & Convert to Text.*
 
 ## Implementation notes (these don't change the architecture)
 
-- **Vector Database = the Elasticsearch index.** The diagram feeds the Vector Database into Elasticsearch Hybrid
-  Search; one ES index with `dense_vector` fields plays both roles.
+- **Vector Database = the Elasticsearch index**, accessed through LangChain's `langchain-elasticsearch`. The diagram
+  feeds the Vector Database into Elasticsearch Hybrid Search; one ES index with `dense_vector` fields plays both roles.
 - **CLIP and text embeddings are different vector spaces.** Keep them in separate fields and fuse only their
   rankings (Rank Fusion), never the raw scores.
 - **Eval results in the corpus.** Tag them (`modality="eval"`, score) so low-scoring ones can be filtered out and

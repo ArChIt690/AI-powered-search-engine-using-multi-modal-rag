@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Embeddings
     text_embedding_model: str = "BAAI/bge-small-en-v1.5"
     text_embedding_dim: int = 384
+    text_query_instruction: str = "Represent this sentence for searching relevant passages: "  # BGE query prefix
     image_embedding_dim: int = 512  # CLIP ViT-B/32, filled in Phase 3
     embedding_batch_size: int = 32
 
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     chunk_size: int = 800  # max characters per chunk
     chunk_overlap: int = 100  # characters carried over between neighbouring chunks
     semantic_breakpoint_percentile: float = 90.0  # higher = fewer, larger semantic chunks
+    semantic_min_chunk_size: int = 200  # characters; avoids tiny one-sentence semantic chunks
 
     # Retrieval
     top_k: int = 10

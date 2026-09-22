@@ -8,6 +8,7 @@ import uuid
 import numpy as np
 import pytest
 from elasticsearch import Elasticsearch
+from langchain_core.embeddings import Embeddings
 
 from Search_Engine.config import Settings
 from Search_Engine.Data.ingest import IngestionPipeline
@@ -15,13 +16,19 @@ from Search_Engine.Data.ingest import IngestionPipeline
 DIM = 4
 
 
-class FakeEmbedder:
+class FakeEmbedder(Embeddings):
     dim = DIM
 
     def embed(self, texts: list[str]) -> np.ndarray:
         rng = np.random.default_rng(0)
         vectors = rng.random((len(texts), DIM), dtype=np.float32) + 0.1
         return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed(texts).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
 
     def embed_chunks(self, chunks):
         for chunk, vector in zip(chunks, self.embed([c.text for c in chunks])):
@@ -62,7 +69,24 @@ def test_ingest_folder_end_to_end(pipeline, es, tmp_path):
     doc = hits[0]["_source"]
     assert doc["metadata"]["section"] == "Dogs"
     assert doc["metadata"]["file_type"] == "md"
+    assert doc["metadata"]["source"] == (tmp_path / "notes.md").resolve().as_posix()
+    assert doc["metadata"]["modality"] == "text"
     assert len(doc["text_embedding"]) == DIM
+
+
+def test_langchain_store_reads_back_with_hybrid_search_and_filters(pipeline, tmp_path):
+    (tmp_path / "notes.md").write_text("# Cats\nCats sleep a lot.\n\n# Dogs\nDogs like walks.", encoding="utf-8")
+    (tmp_path / "people.csv").write_text("name,hobby\nAlice,walks\n", encoding="utf-8")
+    pipeline.ingest_path(tmp_path)
+
+    results = pipeline.vector_db.store.similarity_search(
+        "walks", k=5, filter=[{"term": {"metadata.file_type": "md"}}]
+    )
+
+    # The BM25 part ranks the keyword match first; kNN adds nearest neighbours; the filter drops the CSV.
+    assert results[0].page_content == "# Dogs\nDogs like walks."
+    assert results[0].metadata["section"] == "Dogs"
+    assert {d.metadata["file_type"] for d in results} == {"md"}
 
 
 def test_reingesting_a_file_replaces_its_chunks(pipeline, es, tmp_path):

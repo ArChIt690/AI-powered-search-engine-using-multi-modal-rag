@@ -13,7 +13,7 @@ from Search_Engine.config import Settings, get_settings
 from Search_Engine.Data.chunking import chunk_document
 from Search_Engine.Data.embed import TextEmbedder
 from Search_Engine.Data.enrichment import enrich_chunks
-from Search_Engine.Data.index import ensure_index, replace_document_chunks
+from Search_Engine.Data.index import VectorDatabase
 from Search_Engine.Data.loaders import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,12 @@ class IngestionPipeline:
         self.settings = settings or get_settings()
         self.es = es or Elasticsearch(self.settings.es_url)
         self.embedder = embedder or TextEmbedder(
-            self.settings.text_embedding_model, self.settings.embedding_batch_size
+            self.settings.text_embedding_model,
+            batch_size=self.settings.embedding_batch_size,
+            query_instruction=self.settings.text_query_instruction,
+        )
+        self.vector_db = VectorDatabase(
+            self.es, self.settings.es_index, self.embedder, self.settings.text_embedding_dim
         )
 
     def ingest_path(self, path: Path) -> IngestReport:
@@ -62,7 +67,7 @@ class IngestionPipeline:
             report.chunks += count
             logger.info("Ingested %s (%d chunks)", file, count)
 
-        self.es.indices.refresh(index=self.settings.es_index)  # make everything searchable now, once
+        self.vector_db.refresh()  # make everything searchable now, once
         return report
 
     def ingest_file(self, path: Path) -> int:
@@ -73,12 +78,13 @@ class IngestionPipeline:
             strategy=s.chunking_strategy,
             chunk_size=s.chunk_size,
             overlap=s.chunk_overlap,
-            embed_fn=self.embedder.embed,
+            embeddings=self.embedder,
             breakpoint_percentile=s.semantic_breakpoint_percentile,
+            min_chunk_size=s.semantic_min_chunk_size,
         )
         self.embedder.embed_chunks(chunks)  # Text Embeddings
         enrich_chunks(chunks, doc)  # Metadata Enrichment
-        return replace_document_chunks(self.es, s.es_index, doc.source, chunks)  # Vector Database
+        return self.vector_db.replace_document_chunks(doc.source, chunks)  # Vector Database
 
     def _prepare_index(self) -> None:
         model_dim = self.embedder.dim
@@ -87,9 +93,4 @@ class IngestionPipeline:
                 f"{self.settings.text_embedding_model} produces {model_dim}-dim vectors, "
                 f"but TEXT_EMBEDDING_DIM is {self.settings.text_embedding_dim}"
             )
-        ensure_index(
-            self.es,
-            self.settings.es_index,
-            text_dim=model_dim,
-            image_dim=self.settings.image_embedding_dim,
-        )
+        self.vector_db.check_dimensions()
