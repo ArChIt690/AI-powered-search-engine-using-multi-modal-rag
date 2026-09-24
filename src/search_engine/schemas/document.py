@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from Search_Engine.Schema.chunk import Modality
+from search_engine.schemas.chunk import Modality
 
 
 class Section(BaseModel):

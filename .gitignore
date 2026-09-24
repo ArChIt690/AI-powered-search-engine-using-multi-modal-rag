@@ -11,3 +11,6 @@ wheels/
 
 # Secrets
 .env
+
+# Runtime data (landing folder, eval results)
+data/

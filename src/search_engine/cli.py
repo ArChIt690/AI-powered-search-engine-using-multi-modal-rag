@@ -1,8 +1,7 @@
 import argparse
 from pathlib import Path
 
-from Search_Engine.Data.ingest import IngestionPipeline
-from Search_Engine.utils.logging import setup_logging
+from search_engine.core.logging import setup_logging
 
 
 def main() -> None:
@@ -16,6 +15,9 @@ def main() -> None:
     setup_logging()
 
     if args.command == "ingest":
+        # Imported here so `--help` works before the Ingestion pipeline (Part 1) is built.
+        from search_engine.ingestion.pipeline import IngestionPipeline
+
         report = IngestionPipeline().ingest_path(args.path)
         print(f"\nIngested {report.files} files -> {report.chunks} chunks")
         if report.skipped:
