@@ -1,140 +1,105 @@
 # Build Order
 
-This plan follows **`AI_Search_Engine_Architecture_v2-1.drawio`** ("Architecture v2") strictly. Every step maps
-to a box or arrow in that diagram. Nothing in the diagram is dropped, merged or reordered, and nothing that is not
-in the diagram is added. The v1 diagram (`docs/Search_Engine_Architecture.drawio`) is superseded and no longer
-used for decisions.
+This plan follows **`docs/Search_Engine_Architecture.drawio`** strictly. Every step maps to a box or arrow in the
+diagram. Nothing in the diagram is dropped, merged or reordered, and nothing that is not in the diagram is added.
+(`AI_Search_Engine_Architecture_v2-1.drawio` was an alternative design and is **not** used.)
+
+**Spark Streaming was removed** (2026-09-26): measured on this project, Spark made ingestion slower (104 s vs 86 s
+for the same files) and added Java, Hadoop's `winutils` on Windows and a 10 GB Docker image, with no gain on one
+machine. The diagram's five "Spark Streaming:" boxes were relabelled to their plain names (TEXT Extraction, Extract
+Audio & Convert to Text, CHUNKING, Text Embeddings, Image Embeddings (CLIP)); their logic is unchanged.
+
+**The EVAL → ingestion arrow was removed** (2026-09-26): feeding eval results back into the corpus would let
+earlier LLM answers be retrieved and cited as evidence (errors reinforce themselves, and they go stale when the
+source documents change). Eval results are still **stored separately**, and good answers are still reused through
+RESULT → FAISS Semantic Cache ("goes for caching").
 
 ## Rules
 
-1. **Each region of the diagram is built end to end.** The regions are: Ingestion pipeline, Request path,
-   Cache layer, Retrieval pipeline, Generation (LLM architecture), Frontend, Backend infrastructure,
-   Observability stack and Offline eval pipeline. A part is done only when every box and arrow in its region
-   exists, is connected to its neighbouring regions, and runs (from the CLI, the API or the UI). Nothing is left
-   as a stub "for a later phase".
+1. **The system is built in three parts, and each part is built end to end.** The parts are the three regions of the
+   diagram: the **Ingestion pipeline**, the **Retrieval pipeline** and the **LLM Architecture**. A part is done
+   only when every box and arrow in its region exists, is connected to its neighbouring parts, and runs from the
+   CLI or the API. Nothing is left as a stub "for a later phase".
 2. **The diagram decides.** If the code or this file disagrees with the diagram, the diagram wins. To change the
    architecture, change the diagram first, then this file, then the code.
-3. **Every bold "Spark Streaming:" box is a Spark job.** Each box's logic is written as a plain Python function
-   (so it can be tested without Spark), and the PySpark Structured Streaming job in `streaming/jobs/` calls that
-   function. Both are built in the same part.
-4. **Languages follow the diagram.** The API GATEWAY is **Go (Gin)**. The Frontend is **Next.js**. Everything
-   else (ingestion, caches, retrieval, generation, evals) is **Python**. The LLM is **API-only**; embeddings,
-   CLIP, Whisper and the cross-encoder run on our own server (v2 note 6).
+3. **Each box is a plain Python function or class**, tested on its own; `pipeline.py` in each part connects them.
 
 ## Target flows (from the diagram)
 
-**Ingestion pipeline** (unchanged from v1)
+**Ingestion pipeline**
 ```
-Text Documents ──► Spark: Text Extraction ──► Spark: Chunking (Smart, Semantic) ──► Spark: Text Embeddings ──┐
-PDFs/XML/CSV/JSON ─► PDFs: separate images, charts, tables │ others: just text extraction ─► Chunking          │
-                         └─ charts, images from the PDFs ─► PICTURES                                          ├─► Metadata Enrichment ─► Vector Database
-PICTURES ─────────────────────────────────────────► Spark: Image Embeddings (CLIP) ──────────────────────────┘
-VIDEO ─┬─► Spark: Extract Audio & Convert to Text ─► Text Extraction
+Text Documents ──► TEXT Extraction ──► CHUNKING (Smart, Semantic) ──► Text Embeddings ──┐
+PDFs/XML/CSV/JSON ─► PDFs: separate images, charts, tables │ others: just text extraction ─► CHUNKING │
+                         └─ charts, images from the PDFs ─► PICTURES                                │
+PICTURES ─────────────────────────────────────────► Image Embeddings (CLIP) ────────────────────────┴─► Metadata Enrichment ─► Vector Database
+VIDEO ─┬─► Extract Audio & Convert to Text ─► TEXT Extraction
        └─► Takes pictures frame by frame temporarily ─► PICTURES
-FRONTEND ── file upload ──► Ingestion
 ```
 
-**Request path** (frontend → gateway)
+**Retrieval pipeline**
 ```
-USER ── query ──► FRONTEND (Next.js) ── HTTPS · reply via SSE ──► API GATEWAY (Go, Gin: auth · validate · route)
-  ─► SESSION CHECK (session_id · conversation_id; Redis hot / Postgres history)
-  ─► RATE LIMIT & QUOTAS (Redis token bucket, per-user daily token budget) ──over quota──► 429 Too Many Requests → user
-  ─allowed─► INPUT GUARDRAIL (blocks before any retrieval) ──UNSAFE──► refuse + reason → user
-  ─SAFE─► QUERY ENHANCEMENT (rewrites follow-ups into a standalone query using history)
-  ─standalone query─► Cache layer
-```
-
-**Cache layer** (checked BEFORE retrieval)
-```
-REDIS EXACT CACHE (first, O(1); key = hash(query + filters + user scope); invalidated on re-ingest via TTL / index version)
-   ──HIT──► stream cached answer → FRONTEND
-   ──MISS─► FAISS SEMANTIC CACHE (second; similarity ≥ threshold; same key scoping as Redis)
-               ──HIT──► FRONTEND
-               ──MISS─► Retrieval pipeline
+USER ─► QUERY ─► QUERY Enhancement ─► METADATA FILTERING ─► ELASTICSEARCH HYBRID SEARCH (KEYWORD SEARCH (BM25) + SEMANTIC SEARCH, over the Vector DB)
+     ─► RERANKING (RANKFUSION) using Cross Encoder Models ─► FAISS SEMANTIC CACHE ("checks if similar question in cache") ──HIT──► USER
+                                                                  │ MISS
+                                                                  ▼
+                                   REDIS PROMPT CACHING ("checks if exact prompt or similar prompt there or not") ──HIT──► USER
+                                                                  │ MISS
+                                                                  ▼
+                                                            LLM ("it has its own architecture")
+USER ── Sessional Queries ──► REDIS
 ```
 
-**Retrieval pipeline** (unchanged boxes)
+**LLM Architecture**
 ```
-METADATA FILTERING ─► ELASTICSEARCH HYBRID SEARCH (BM25 keyword + semantic dense, over the Vector DB)
-  ─► RERANKING (rank fusion + cross-encoder) ── top-k chunks ──► Generation
-Vector Database ── indexed chunks + embeddings ──► Elasticsearch Hybrid Search
+LLM ─► MCP
+    ─► TOOLS
+    ─► GUARDRAIL ──UNSAFE──► USER ("sends the reason alongside")
+             └──SAFE──► EVAL ─► RESULT ─┬─► FAISS SEMANTIC CACHE ("goes for caching")
+                          │             └─► FINAL RESULT to USER
+                          └─► "all the eval results are stored separately"
 ```
-
-**Generation** (LLM architecture)
-```
-CONTEXT BUILDING (system prompt + last N turns / summary + top-k chunks + question → one prompt)
-  ─► LLM GATEWAY (LiteLLM: API keys · retries · provider fallback on 429/outage · token + cost logging)
-  ─► MODEL ROUTER ──easy──► FAST API MODEL (cheap / free-tier, low latency)
-                  └─hard──► LARGE API MODEL (2nd provider = fallback)          [MODEL POOL, API only]
-MODEL POOL ◄── tool calls ──► MCP ◄──► TOOLS (call API · external search · run code in a Docker sandbox)
-MODEL POOL ─► OUTPUT GUARDRAIL (safety + policy) ──UNSAFE──► refuse / regenerate
-                                                 └─SAFE──► RESULT (stream to user · save turn → Postgres)
-RESULT ── FINAL RESULT → user (SSE stream) ──► FRONTEND
-RESULT ┄┄ async ┄┄► write Redis + FAISS (the Cache layer)
-RESULT ┄┄ async ┄┄► ONLINE EVAL (light groundedness check, never blocks the reply)
-                        ┄┄ eval results + 👍/👎 ┄┄► Postgres   (NOT back into ingestion)
-```
-
-**Backend infrastructure**: REDIS (sessions · rate limits · exact-match cache), FAISS (semantic-cache index),
-ELASTICSEARCH / VECTOR DB (chunks · embeddings · metadata), POSTGRESQL (users · conversations · settings ·
-eval_results · feedback).
-
-**Observability stack**: LANGFUSE (traces · token usage · cost per request), PROMETHEUS + GRAFANA (latency ·
-errors · provider rate-limit hits), STRUCTURED LOGS (JSON with request_id). Every stage emits OpenTelemetry spans.
-
-**Offline eval pipeline**: BATCH EVAL (RAGAS-style): fixed test set + sampled traces + 👍/👎 → scores in Postgres →
-dashboard; tracks quality release to release.
 
 ## Folder layout
 
-```
-gateway/                 Go module: the API GATEWAY (Gin), incl. Session Check and Rate Limit & Quotas middleware
-frontend/                Next.js chat UI (the FRONTEND box)
-src/search_engine/       Python package, one folder per diagram region
-  core/                  config.py (pydantic-settings reading .env), logging.py, exceptions.py
-  schemas/               Pydantic models shared by all regions (Document, Chunk, query, response, eval)
-  infra/                 clients built in one place: Elasticsearch, Redis, FAISS, Postgres, models.py (bge, CLIP, Whisper, cross-encoder)
-  ingestion/             Ingestion pipeline (sources/, chunking, text_embed, image_embed, enrichment, vector_store, pipeline)
-  streaming/             spark.py (SparkSession builder) and jobs/: one PySpark job per bold "Spark Streaming:" box
-  request/               Python half of the Request path: input_guardrail.py, query_enhance.py
-  cache/                 Cache layer: exact_cache.py (Redis), semantic_cache.py (FAISS), keys.py (key scoping, index version)
-  retrieval/             Retrieval pipeline: filters.py, hybrid_search.py, rerank.py, pipeline.py
-  generation/            Generation: context.py, llm_gateway.py (LiteLLM), router.py, mcp.py, tools/, output_guardrail.py, result.py, online_eval.py, pipeline.py
-  api/                   internal FastAPI service the gateway routes to (not exposed publicly)
-  cli.py                 search-engine command: ingest, stream, search
-db/migrations/           Postgres schema (users, conversations, turns, settings, eval_results, feedback)
-eval/                    Offline eval pipeline (RAGAS-style batch eval)
-observability/           Prometheus scrape config, Grafana dashboards, OpenTelemetry collector config
-tests/unit/              mirrors src/ and gateway/, no Docker needed
-tests/integration/       real Elasticsearch, Redis and Postgres from docker-compose.yml
-tests/e2e/               query in → streamed answer out; one test per part's "Done when"
-data/                    git-ignored runtime data: landing/ (Spark stream source), checkpoints/
-docker/                  Dockerfile.api, Dockerfile.spark, Dockerfile.gateway, Dockerfile.frontend
-```
+One installable package, `src/search_engine/`. Each folder is a diagram region and each module is a diagram box.
 
-The empty placeholder files left over from the v1 layout (`retrieval/prompt_cache.py`, `retrieval/session.py`,
-`retrieval/semantic_cache.py`, `llm/*`, `schemas/eval.py`) are moved or deleted when the part that owns them is
-built. Entry points (`gateway/`, `api/`, `cli.py`, `streaming/jobs/`) only call a region's `pipeline.py`; they
-hold no logic. Run Python with `uv run search-engine ...` / `uv run pytest`, and Go with `go run ./cmd/gateway` /
-`go test ./...` inside `gateway/`.
+| Folder | Holds |
+|---|---|
+| `core/` | `config.py` (pydantic-settings reading `.env`), `logging.py`, `exceptions.py` |
+| `schemas/` | Pydantic models shared by all three parts (`Document`, `Chunk`, `ChunkMetadata`, query, response, eval) |
+| `infra/` | Clients built once: `elasticsearch.py`, `redis.py`, `faiss_index.py`, `llm_client.py`, `models.py` (bge, CLIP, Whisper, cross-encoder) |
+| `ingestion/` | **Ingestion pipeline**: `sources/`, `chunking.py`, `text_embed.py`, `image_embed.py`, `enrichment.py`, `vector_store.py`, `pipeline.py` |
+| `retrieval/` | **Retrieval pipeline**: `query_enhance.py`, `filters.py`, `hybrid_search.py`, `rerank.py`, `semantic_cache.py`, `prompt_cache.py`, `session.py`, `pipeline.py` |
+| `llm/` | **LLM Architecture**: `agent.py`, `mcp.py`, `tools/`, `guardrail.py`, `eval.py`, `eval_store.py`, `pipeline.py` |
+| `api/` | FastAPI app, the USER entry point (`app.py`, `deps.py`, `routes/`) |
+| `cli.py` | `search-engine` command: `ingest`, `search` |
+| `tests/unit/` | Mirrors `src/`, no Docker needed; `-m slow` runs the real models |
+| `tests/integration/` | Real Elasticsearch + Redis from `docker-compose.yml` (skipped when not running) |
+| `tests/e2e/` | File in → answer out; one test per part's "Done when" |
+| `eval/` | Dev-only retrieval benchmark (recall@k, MRR). Not the EVAL box. |
+| `data/` | Git-ignored runtime data: `eval_results/` |
+| `docs/` | `Search_Engine_Architecture.drawio` |
+| `Prompts/` | This file and the approved plans (`Prompts/plans/`) |
+
+Entry points (`api/`, `cli.py`) only call a part's `pipeline.py`; they hold no logic.
+Run things with `uv run search-engine ...` and `uv run pytest`.
 
 ---
 
 ## Part 0: Setup ✅
 
-- `docker-compose.yml`: Elasticsearch + Redis. Postgres, Spark, the gateway, the frontend and the observability
-  services are added by the part that first needs them.
+- `docker-compose.yml`: Elasticsearch 8.15 (basic license) + Redis (redis-stack, for the vector search that Redis
+  Prompt Caching's "similar prompt" check needs)
 - `core/config.py`: pydantic-settings reading `.env` (keys listed in `.env.example`)
 - Check: `curl http://localhost:9200`, `docker exec search-redis redis-cli ping`
 
 ---
 
-## Part 1: Ingestion pipeline (end to end)
+## Part 1: Ingestion pipeline (end to end) ✅
 
-Diagram boxes: *Text Documents, PDFs/XML/CSV/JSON, PICTURES, VIDEO, Spark Streaming: Text Extraction,
-PDF separation of images/charts/tables, Spark Streaming: Extract Audio & Convert to Text, Takes pictures frame by
-frame temporarily, Spark Streaming: Chunking (Smart, Semantic), Spark Streaming: Text Embeddings,
-Spark Streaming: Image Embeddings (CLIP), Metadata Enrichment, Vector Database; arrow "file upload → ingestion".*
+Diagram boxes: *Text Documents, PDFs/XML/CSV/JSON, PICTURES, VIDEO, TEXT Extraction, PDF separation of
+images/charts/tables, Extract Audio & Convert to Text, Takes pictures frame by frame temporarily, CHUNKING (Smart,
+Semantic), Text Embeddings, Image Embeddings (CLIP), Metadata Enrichment, Vector Database.*
 
 ### 1.1 Inputs and Text Extraction ✅
 `ingestion/sources/`, one loader per diagram input, each returning a `Document` (`sections` for text,
@@ -152,233 +117,150 @@ Spark Streaming: Image Embeddings (CLIP), Metadata Enrichment, Vector Database; 
 
 ### 1.2 Chunking (Smart, Semantic) ✅
 `ingestion/chunking.py`, `chunk_document(doc, embeddings, settings)`:
-- *Semantic* for prose (txt, Markdown, PDF text): cut where the meaning shifts; oversized pieces re-split
+- *Semantic* for prose (txt, Markdown, PDF text): cut where the meaning shifts (our own splitter on bge);
+  oversized pieces re-split
 - *Smart* for records (whole records packed, oversized records split at field lines with their first line
   repeated), tables (split between rows, header repeated) and transcripts (kept one-to-one with timestamps)
 - chunks never cross a page, heading, transcript section or table edge
 
-### 1.3 Text Embeddings and Image Embeddings (CLIP)
+### 1.3 Text Embeddings and Image Embeddings (CLIP) ✅
 - `ingestion/text_embed.py`: **Text Embeddings** (sentence-transformers, `BAAI/bge-small-en-v1.5`, 384-dim) →
   `Chunk.text_embedding`; also the LangChain `Embeddings` used by semantic chunking and query embedding
 - `ingestion/image_embed.py`: **Image Embeddings (CLIP)** (sentence-transformers `clip-ViT-B-32`, 512-dim):
-  each `Picture` → a `Chunk` with `image_embedding`; plus the CLIP text encoder for text-to-image search
+  each `Picture` → a `Chunk` with `image_embedding`; `ClipTextEmbeddings` is CLIP's text encoder as a LangChain
+  `Embeddings`, for text-to-image search
 - models loaded once in `infra/models.py`
 
-### 1.4 Metadata Enrichment
-`ingestion/enrichment.py`, after both embedding boxes: chunk id, source, file type, modality, page, timestamp,
-dates, title/section, and the **index version** the Cache layer uses for invalidation. Metadata Filtering in
-Part 2 depends on these fields.
+### 1.4 Metadata Enrichment ✅
+`ingestion/enrichment.py`, `enrich(doc, chunks)`, after both embedding boxes: a stable chunk id
+(`<doc_id>-<chunk_index>`, `doc_id` = hash of the file path, so re-ingesting replaces instead of duplicating) and
+the typed `ChunkMetadata` fields (`schemas/chunk.py`): file name/type, content, title, section, author, created,
+file_modified, ingested_at, page_count, duration_s, language; `modality`, `page` and `timestamp` stay top-level
+Chunk fields. No LLM calls.
 
-### 1.5 Vector Database
-`ingestion/vector_store.py`: one Elasticsearch index with a `text` field (BM25, English analyzer),
-`text_embedding` and `image_embedding` `dense_vector` fields, and typed `metadata.*` fields. Each successful
-ingest bumps the index version (so the Cache layer's "invalidate on re-ingest" works).
+### 1.5 Vector Database ✅
+`ingestion/vector_store.py`, through **LangChain** (`langchain-elasticsearch` `ElasticsearchStore`): two stores in
+the same Elasticsearch, because a LangChain store manages one vector field per index:
+- text store, index `search_chunks_text`: text, table, record and transcript chunks, `text_embedding` (384, bge)
+- image store, index `search_chunks_images`: image, chart and frame chunks, `image_embedding` (512, CLIP)
 
-### 1.6 Pipeline and Spark Streaming
-- `ingestion/pipeline.py`: `IngestionPipeline` connects 1.1 → 1.5 for one file or a folder
-- `streaming/jobs/`: one PySpark Structured Streaming job per bold box (**Text Extraction, Extract Audio & Convert
-  to Text, Chunking, Text Embeddings, Image Embeddings (CLIP)**), each calling the functions above
-- Stream source: the watched landing folder `data/landing/` (Spark file source, checkpoints in `data/checkpoints/`)
-- Add Spark to `docker-compose.yml` (`docker/Dockerfile.spark`, Java 17)
-- `search-engine ingest <path>` for a one-off run, `search-engine stream` to start the Spark jobs
+LangChain creates each index (`DenseVectorStrategy`, `metadata_mappings` generated from `ChunkMetadata`, English
+default analyzer for the BM25 `text` field) and does every write (`add_embeddings` with the precomputed vectors).
+Documents are `{text, <vector>, metadata: {ChunkMetadata fields + modality, page, timestamp}}`. Re-ingesting a file
+deletes its old chunks by `doc_id` first. Each write bumps the Redis counter `search:index_version`, so cached
+answers can be dropped when the corpus changes.
 
-**Done when:** dropping a txt/md/pdf/xml/csv/json file, an image or a video into `data/landing/` (or running
-`search-engine ingest`) produces enriched, embedded chunks in Elasticsearch: text chunks, PDF tables, PDF charts
-and images, video transcript chunks and video frames, each with the right `modality`. (The "file upload →
-ingestion" arrow is wired in Part 5, when the frontend and gateway exist: uploads land in `data/landing/`.)
+### 1.6 Pipeline ✅
+- `ingestion/pipeline.py`: `IngestionPipeline` connects 1.1 → 1.5 for one file or a folder; one bad file is
+  recorded as failed and doesn't stop the rest ✅
+- `search-engine ingest <path>` ✅ (4 real files → 70 chunks in Elasticsearch: text, tables, records, images,
+  video transcript and frames)
+- `tests/e2e/test_ingestion_done_when.py`: one file of each of the 8 input types → real Elasticsearch, every
+  chunk kind and modality present, embedded, enriched, with page / timestamp citations
+  (`uv run pytest -m "slow and integration"`)
+
+**Done when:** running `search-engine ingest` on a txt/md/pdf/xml/csv/json file, an image and a video produces
+enriched, embedded chunks in Elasticsearch: text chunks, PDF tables, PDF charts and images, video transcript chunks
+and video frames, each with the right `modality`.
 
 ---
 
 ## Part 2: Retrieval pipeline (end to end)
 
-Diagram boxes: *Metadata Filtering, Elasticsearch Hybrid Search (BM25 keyword + semantic dense), Reranking (rank
-fusion + cross-encoder); arrows "indexed chunks + embeddings" (Vector DB → hybrid search), "top-k chunks" →
-Context Building.*
+Diagram boxes: *USER → QUERY, QUERY Enhancement, METADATA FILTERING, ELASTICSEARCH HYBRID SEARCH (KEYWORD SEARCH
+(BM25) + SEMANTIC SEARCH), RERANKING (RANKFUSION) using Cross Encoder Models, FAISS SEMANTIC CACHE (HIT/MISS),
+REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
 
-1. `schemas/query.py`: the retrieval request (standalone query, filters, user scope, top_k).
-2. `retrieval/filters.py`: **Metadata Filtering**: query options → ES `filter` clauses on the Part 1.4 fields
-   (modality, file type, source, dates…).
-3. `retrieval/hybrid_search.py`: **Elasticsearch Hybrid Search** over the Vector Database:
-   - **BM25 keyword** on `text`
-   - **semantic (dense)**: kNN on `text_embedding` (bge query embedding), plus kNN on `image_embedding` (CLIP
-     text encoder) so text queries find PDF charts, images and video frames
-   - ES's built-in RRF needs a paid license, so the lists are fused in the next step
-4. `retrieval/rerank.py`: **Reranking**: rank fusion (RRF, our code) of the BM25, text-kNN and image-kNN lists,
-   then a **cross-encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N → **top-k chunks**.
-5. `retrieval/pipeline.py`: filters → hybrid search → reranking; `search-engine search "<query>" --retrieve-only`
-   prints the top-k chunks with citations.
+1. `schemas/query.py`, `schemas/response.py`: request/response models (query, session id, filters; answer,
+   citations, cache source, guardrail reason).
+2. `retrieval/query_enhance.py`: **QUERY Enhancement** (LLM rewrite, expansion or HyDE).
+3. `retrieval/filters.py`: **METADATA FILTERING**, which turns the query or user options into filters on the
+   Part 1.4 fields (modality, file type, source, dates…).
+4. `retrieval/hybrid_search.py`: **ELASTICSEARCH HYBRID SEARCH** over the Vector Database, all through
+   **LangChain** (the two 1.5 stores + a LangChain BM25 retriever):
+   - **KEYWORD SEARCH (BM25)** on `text`
+   - **SEMANTIC SEARCH**: kNN on `text_embedding` (bge query embedding), plus kNN on `image_embedding` (CLIP text
+     encoder) so text queries find PDF charts, images and video frames
+   - LangChain's built-in `DenseVectorStrategy(hybrid=True)` was tested on the local ES and returns **403** (basic
+     license: "non-compliant for Reciprocal Rank Fusion"), so the lists are fused in the next step instead
+5. `retrieval/rerank.py`: **RERANKING (RANKFUSION) using Cross Encoder Models**: rank fusion (RRF via LangChain's
+   `EnsembleRetriever`, from `langchain-classic`) of the BM25, text-kNN and image-kNN lists, then a **Cross
+   Encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N.
+6. The cache boxes, **after Reranking and before the LLM**, in the diagram's order:
+   - `retrieval/semantic_cache.py`, **FAISS SEMANTIC CACHE**: "checks if similar question in cache". HIT → USER,
+     MISS → Redis.
+   - `retrieval/prompt_cache.py`, **REDIS PROMPT CACHING**: "checks if exact prompt or similar prompt there or not".
+     Exact = hash of the normalized prompt; similar = Redis vector search over prompt embeddings. HIT → USER,
+     MISS → LLM.
+   - `retrieval/session.py`, **Sessional Queries**: the USER's queries in the current session, stored in Redis
+     (keyed by session id, with a TTL). They feed the prompt cache and give the LLM conversation context.
+7. **LLM** box: `retrieval/pipeline.py` hands the prompt to `llm/agent.py`. In this part that is a direct LLM call
+   with the reranked chunks as context. Part 3 replaces it with the full LLM Architecture behind the same function.
+8. `api/routes/search.py`: FastAPI `/search` (USER → QUERY → answer), and `search-engine search "<query>"`.
+9. `eval/`: 20–30 questions with known answers to measure recall@k and MRR while tuning (a dev tool, not the EVAL box).
 
-**Done when:** a query returns reranked top-k chunks mixing text and image hits, each with its citation (source,
-PDF page, video timestamp), and metadata filters narrow the results.
-
----
-
-## Part 3: Generation (end to end)
-
-Diagram boxes: *Context Building, LLM Gateway (LiteLLM), Model Router, Model Pool (Fast API model, Large API
-model), MCP, TOOLS, Output Guardrail (UNSAFE → refuse / regenerate), RESULT (stream to user, save turn →
-Postgres), Online Eval (async) → Postgres; arrows "top-k chunks", "tool calls", "FINAL RESULT → user (SSE
-stream)", "write Redis + FAISS" (async), "eval results + 👍/👎" → Postgres.*
-
-Infrastructure added: **PostgreSQL** in `docker-compose.yml`, schema in `db/migrations/` (users, conversations,
-turns, settings, eval_results, feedback), client in `infra/postgres.py`.
-
-1. `generation/context.py`: **Context Building**: system prompt + last N turns (or a summary) from Postgres +
-   top-k chunks + question → one prompt with numbered citations.
-2. `generation/llm_gateway.py`: **LLM Gateway (LiteLLM)**: provider API keys, retries, provider fallback on
-   429 / outage, token + cost logging per call.
-3. `generation/router.py`: **Model Router**: classifies the query easy / hard → **Fast API model** (cheap or
-   free-tier) or **Large API model** (its 2nd provider is the fallback). Both are API-only.
-4. `generation/mcp.py` and `generation/tools/`: **MCP** client and **TOOLS** (call API, external search, run code
-   in a Docker sandbox), invoked through the model's tool calls.
-5. `generation/output_guardrail.py`: **Output Guardrail** (safety + policy): **UNSAFE → refuse / regenerate**,
-   **SAFE → RESULT**.
-6. `generation/result.py`: **RESULT**: streams the answer token by token (SSE), saves the turn to Postgres, and
-   asynchronously writes it to the Cache layer (Redis + FAISS; wired in Part 4).
-7. `generation/online_eval.py`: **Online Eval (async)**: a light groundedness check that never blocks the reply;
-   results go to Postgres `eval_results`, **never back into ingestion** (v2 note 4).
-8. `generation/pipeline.py` + `api/routes/`: the internal FastAPI service streams RESULT over SSE;
-   `search-engine search "<query>"` runs retrieval + generation from the CLI.
-
-**Done when:** a question returns a streamed, cited answer from the routed model (with tool calls when needed);
-unsafe output is refused or regenerated; the turn is saved in Postgres; and an online-eval row appears in
-Postgres without delaying the answer.
+**Done when:** a question returns a cited answer produced from reranked hybrid results (text and image hits), and
+asking the same or a similar question again is answered from the FAISS or Redis cache without calling the LLM.
 
 ---
 
-## Part 4: Cache layer (end to end)
+## Part 3: LLM Architecture (end to end)
 
-Diagram boxes: *Redis Exact Cache (checked first), FAISS Semantic Cache (checked second); arrows "standalone
-query" in, HIT → stream cached answer to the frontend, MISS → next box / Metadata Filtering, "write Redis +
-FAISS" from RESULT.*
+Diagram boxes: *LLM, MCP, TOOLS, GUARDRAIL (SAFE / UNSAFE, "sends the reason alongside"), EVAL, RESULT,
+"goes for caching", FINAL RESULT to USER, "all the eval results are stored separately".*
 
-1. `cache/keys.py`: cache key scoping = hash(standalone query + filters + user scope), plus the current index
-   version from Part 1.5.
-2. `cache/exact_cache.py`: **Redis Exact Cache**: O(1) lookup by key; entries expire by TTL and are invalidated
-   when the index version changes (re-ingest). HIT → stream the cached answer; MISS → FAISS.
-3. `cache/semantic_cache.py`: **FAISS Semantic Cache**: nearest cached query (bge embedding) with
-   similarity ≥ threshold, same key scoping as Redis. HIT → cached answer; MISS → Metadata Filtering (Part 2).
-   The FAISS index is persisted to a volume (`infra/faiss_index.py`).
-4. Wire RESULT's async "write Redis + FAISS" (Part 3) and put the Cache layer in front of retrieval in the
-   pipeline.
+1. `llm/agent.py`: the **LLM** as an agent that can call:
+   - `llm/mcp.py`: **MCP** client (connects to MCP servers)
+   - `llm/tools/`: **TOOLS** (local function tools, one file per tool)
+2. `llm/guardrail.py`: **GUARDRAIL** on the LLM output:
+   - **UNSAFE** → back to the USER with the reason
+   - **SAFE** → EVAL
+3. `llm/eval.py`: **EVAL** (LLM-as-judge: faithfulness to the context, relevance, citation correctness), as JSON.
+4. `llm/pipeline.py`: builds the **RESULT**, which:
+   - **goes for caching**: written to the FAISS Semantic Cache (only results that passed GUARDRAIL + EVAL)
+   - is returned as the **FINAL RESULT to USER**
+5. `llm/eval_store.py`: **"all the eval results are stored separately"**: every eval result is saved as a JSON
+   record in its own store (`data/eval_results/`), for monitoring answer quality and tuning retrieval. It is
+   **never** ingested into the Vector Database, so LLM answers can't come back as evidence.
+6. Swap the direct LLM call from Part 2 for this pipeline behind the same function.
 
-**Done when:** asking the same question again is answered from Redis, a paraphrase is answered from FAISS, both
-without search, cross-encoder or LLM calls; and re-ingesting a file invalidates the cached answers.
-
----
-
-## Part 5: Request path + API Gateway (Go) (end to end)
-
-Diagram boxes: *USER, FRONTEND → API GATEWAY (HTTPS, reply via SSE), Session Check, Rate Limit & Quotas (429 →
-user), Input Guardrail (UNSAFE → refuse + reason → user), Query Enhancement → "standalone query" into the Cache
-layer; arrow "file upload → ingestion".*
-
-1. **`gateway/`: API GATEWAY in Go (Gin)**, the only public entry point:
-   - **auth**: JWT bearer tokens; users in Postgres
-   - **validate**: request body schema and size limits, upload type and size limits
-   - **route**: reverse-proxies to the internal FastAPI service, passing the SSE stream through unbuffered;
-     file uploads are forwarded to the ingestion upload endpoint, which saves them into `data/landing/`
-   - adds a `request_id` to every request and forwards it downstream
-   - `docker/Dockerfile.gateway`, service in `docker-compose.yml`
-2. **Session Check** (Go middleware, `gateway/internal/session`): resolves `session_id` and `conversation_id`,
-   hot state in Redis, history in Postgres.
-3. **Rate Limit & Quotas** (Go middleware, `gateway/internal/ratelimit`): Redis token bucket per user plus a
-   per-user daily token budget (decremented from the token counts the LLM Gateway logs). Over quota →
-   **429 Too Many Requests → user**.
-4. `request/input_guardrail.py`: **Input Guardrail**, first Python step, before any retrieval or cache lookup:
-   **UNSAFE → refuse + reason → user**; SAFE → Query Enhancement.
-5. `request/query_enhance.py`: **Query Enhancement**: rewrites follow-ups into a standalone query using the
-   conversation history → the Cache layer (Part 4).
-
-**Done when:** an authenticated HTTPS request through the Go gateway streams an answer back over SSE; a request
-without a valid token is rejected; exceeding the rate limit returns 429; an unsafe query is refused with a reason
-before any retrieval; a follow-up question is rewritten into a standalone query; and a file uploaded through the
-gateway gets ingested.
-
----
-
-## Part 6: Frontend (end to end)
-
-Diagram box: *FRONTEND (Next.js chat UI)* with its listed features.
-
-- `frontend/`: Next.js chat UI: answers streamed token by token (SSE from the gateway), conversation sidebar,
-  citations that open the PDF page / image / video timestamp, file upload (→ ingestion), 👍/👎 feedback
-  (→ Postgres `feedback`), badges showing cached · model · latency.
-- `docker/Dockerfile.frontend`, service in `docker-compose.yml`.
-
-**Done when:** a user can log in, ask questions in a conversation, watch answers stream with clickable citations,
-see cached/model/latency badges, upload a file and later find it in answers, and leave 👍/👎 feedback.
-
----
-
-## Part 7: Observability stack (end to end)
-
-Diagram boxes: *Langfuse, Prometheus + Grafana, Structured Logs; "every stage emits OpenTelemetry spans".*
-
-- **OpenTelemetry spans** from every stage: Go gateway (otelgin), request path, cache, retrieval, generation,
-  ingestion.
-- **Langfuse**: traces, token usage and cost per request (fed by the LLM Gateway).
-- **Prometheus + Grafana**: latency, errors, provider rate-limit hits; dashboards in `observability/`.
-- **Structured logs**: JSON logs with `request_id` in Go (`log/slog`) and Python (`core/logging.py`).
-- Services added to `docker-compose.yml`.
-
-**Done when:** one request can be followed end to end by its `request_id` across gateway and Python logs, shows
-as a trace with token cost in Langfuse, and moves the latency/error/rate-limit panels in Grafana.
-
----
-
-## Part 8: Offline eval pipeline (end to end)
-
-Diagram box: *BATCH EVAL (RAGAS-style): fixed test set + sampled traces + 👍/👎 → scores in Postgres → dashboard;
-tracks quality release to release.*
-
-- `eval/`: fixed test set (questions with known answers and sources), plus sampled production traces and 👍/👎
-  feedback from Postgres.
-- RAGAS-style metrics (faithfulness, answer relevance, context precision / recall), scores written to Postgres
-  tagged with the release, and a Grafana dashboard comparing releases.
-
-**Done when:** one command runs the batch eval, stores scores per release in Postgres, and the dashboard shows
-the change from the previous release.
+**Done when:** every answer passes through LLM (with MCP/TOOLS) → GUARDRAIL → EVAL → RESULT; unsafe answers come
+back with a reason; safe results are cached; and every eval result is stored separately (and does not appear in
+search results).
 
 ---
 
 ## Implementation notes (these don't change the architecture)
 
-- **Vector Database = the Elasticsearch index.** One index with `dense_vector` fields serves both the Vector
-  Database box and Elasticsearch Hybrid Search.
-- **CLIP and text embeddings are different vector spaces.** Keep them in separate fields and fuse only their
+- **Vector Database = the Elasticsearch indexes**, accessed through `langchain-elasticsearch`. The diagram feeds the
+  Vector Database into Elasticsearch Hybrid Search, so the same ES serves both boxes.
+- **CLIP and text embeddings are different vector spaces.** Keep them in separate indexes and fuse only their
   rankings (rank fusion), never the raw scores.
-- **The internal FastAPI service** is how the Go gateway reaches the Python boxes; it is not public and holds no
-  logic of its own.
-- **Eval results never enter the corpus** (v2 note 4). `Modality.EVAL` from the v1 design is removed when
-  Metadata Enrichment (1.4) is built.
-- **Redis** no longer needs vector search (v2 uses Redis for exact-match only; FAISS does similarity), so plain
-  Redis is enough; the current redis-stack image also works.
+- **Eval results stay out of the corpus.** Only original documents are retrievable; eval results live in
+  `data/eval_results/` and good answers are reused through the FAISS Semantic Cache.
+- **Scaling ingestion later** (many files, uploads): a small worker on a Redis job queue calling
+  `IngestionPipeline.ingest_file`, and a GPU for Whisper and the embedding models. Add to the diagram first.
 
 ## LLM call budget
 
-LLM calls per query in the v2 flow. Embeddings, CLIP, Whisper and the cross-encoder are local models, not LLM calls.
+LLM calls per query, following the diagram as it is. Embedding models, CLIP, Whisper and the cross-encoder are
+local models, not LLM calls.
 
 | Box | LLM calls | Notes |
 |---|---|---|
-| Input Guardrail | 1 (or 0) | 0 with a small local safety classifier. |
-| Query Enhancement | 0–1 | Only follow-ups need rewriting; a first message can pass through unchanged. |
-| Redis Exact / FAISS Semantic Cache | 0 | Hash lookup / embedding lookup. |
-| Metadata Filtering, Hybrid Search, Reranking | 0 | |
-| Model Router | 0 (or 1) | 0 with rules or a small classifier. |
-| Model Pool | 1 + N | N = MCP / TOOLS round-trips. |
-| Output Guardrail | 1 (or 0) | 0 with a local classifier; "regenerate" adds another Model Pool call. |
-| Online Eval | 0–1, async | Never in the request path. |
+| Query Enhancement | 1 | Rewrite, expansion or HyDE. Runs on every query, including cache hits. |
+| Metadata Filtering | 0 (or 1) | 0 with rule-based or user-supplied filters; 1 if an LLM extracts filters from the query. |
+| Hybrid Search, Reranking | 0 | |
+| FAISS Semantic Cache, Redis Prompt Caching | 0 | Embedding lookups only. |
+| LLM | 1 + N | N = number of TOOLS / MCP round-trips. |
+| GUARDRAIL | 1 (or 0) | 0 if a small safety classifier is used instead of an LLM. |
+| EVAL | 1 | LLM-as-judge. |
 
-- **Cache hit:** 0–2 calls (guardrail + enhancement). Because the caches sit before retrieval, a hit also skips
-  search and the cross-encoder.
-- **Cache miss:** 1 + N calls with classifier guardrails and a first message; up to 4 + N with LLM-based
-  guardrails, enhancement and routing.
+- **Cache hit:** 1 call (Query Enhancement). The caches sit after Reranking, so a hit still pays for enhancement
+  and the full search.
+- **Cache miss:** about 4 + N calls, or 3 + N with a classifier guardrail.
 - **Ingestion:** 0 calls.
 
 ## Open decisions
 
-- **Kafka.** Not in the diagram. Ingestion streams from the `data/landing/` folder (Spark file source). To use
-  Kafka, add it to the diagram first.
-- **Semantic chunker.** `SemanticChunker` comes from `langchain-experimental`, which is being retired. Decide in
-  1.3 whether to replace it with our own splitter on the real bge model.
+- **Kafka / Spark.** Not in the diagram. Ingestion runs through `IngestionPipeline` directly.

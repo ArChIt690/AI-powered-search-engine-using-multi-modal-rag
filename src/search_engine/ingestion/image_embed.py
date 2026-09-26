@@ -9,6 +9,7 @@ import logging
 from pathlib import PurePosixPath
 
 import numpy as np
+from langchain_core.embeddings import Embeddings
 from PIL import Image
 
 from search_engine.core.config import Settings, get_settings
@@ -26,7 +27,7 @@ class ImageEmbedder:
         self.settings = settings or get_settings()
 
     def embed_pictures(self, doc: Document) -> list[Chunk]:
-        """Spark Streaming: Image Embeddings (CLIP). One chunk per picture; unreadable pictures are skipped."""
+        """Image Embeddings (CLIP). One chunk per picture; unreadable pictures are skipped."""
         chunks: list[Chunk] = []
         size = self.settings.embedding_batch_size
         # Decode one batch at a time: hundreds of video frames decoded at once would take gigabytes.
@@ -55,6 +56,20 @@ class ImageEmbedder:
             convert_to_numpy=True,
             show_progress_bar=False,
         )
+
+
+class ClipTextEmbeddings(Embeddings):
+    """CLIP's text encoder as a LangChain `Embeddings`: the query embedder of the image vector store,
+    so a text query can be matched against image, chart and frame vectors."""
+
+    def __init__(self, embedder: ImageEmbedder | None = None):
+        self.embedder = embedder or ImageEmbedder()
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embedder.embed_texts(texts).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embedder.embed_texts([text])[0].tolist()
 
 
 def _decode(picture: Picture, source: str) -> Image.Image | None:

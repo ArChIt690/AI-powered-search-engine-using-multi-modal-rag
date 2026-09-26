@@ -32,7 +32,7 @@ _SENTENCE_END = re.compile(r"(?<=[.?!])\s+")
 def chunk_document(
     doc: Document, embeddings: Embeddings | None = None, settings: Settings | None = None
 ) -> list[Chunk]:
-    """Spark Streaming: Chunking. `embeddings` is needed only when prose is chunked semantically."""
+    """CHUNKING (Smart, Semantic). `embeddings` is needed only when prose is chunked semantically."""
     settings = settings or get_settings()
     size, overlap = settings.chunk_size, settings.chunk_overlap
     if not 0 <= overlap < size:

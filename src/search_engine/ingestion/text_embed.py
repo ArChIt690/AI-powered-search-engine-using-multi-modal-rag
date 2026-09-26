@@ -31,7 +31,7 @@ class TextEmbedder(Embeddings):
         )
 
     def embed_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
-        """Spark Streaming: Text Embeddings. Fills text_embedding on each chunk, in order."""
+        """Text Embeddings. Fills text_embedding on each chunk, in order."""
         vectors = self.embed([chunk.text for chunk in chunks])
         for chunk, vector in zip(chunks, vectors, strict=True):
             chunk.text_embedding = vector.tolist()

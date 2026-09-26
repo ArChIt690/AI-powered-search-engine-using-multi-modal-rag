@@ -9,11 +9,12 @@ class Settings(BaseSettings):
 
     # Elasticsearch
     es_url: str = "http://localhost:9200"
-    es_index: str = "search_chunks"
+    es_text_index: str = "search_chunks_text"  # text, table, record and transcript chunks (bge vectors)
+    es_image_index: str = "search_chunks_images"  # image, chart and video-frame chunks (CLIP vectors)
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
-
+    index_version_key: str = "search:index_version"  # bumped after every ingest; the Cache layer invalidates on it
     # Embeddings
     text_embedding_model: str = "BAAI/bge-small-en-v1.5"
     text_embedding_dim: int = 384

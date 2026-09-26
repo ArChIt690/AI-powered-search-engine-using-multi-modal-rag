@@ -15,7 +15,7 @@ def main() -> None:
     setup_logging()
 
     if args.command == "ingest":
-        # Imported here so `--help` works before the Ingestion pipeline (Part 1) is built.
+        # Imported here: the models load slowly, and `--help` shouldn't wait for them.
         from search_engine.ingestion.pipeline import IngestionPipeline
 
         report = IngestionPipeline().ingest_path(args.path)

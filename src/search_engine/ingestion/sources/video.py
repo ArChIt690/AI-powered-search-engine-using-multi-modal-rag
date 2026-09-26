@@ -48,7 +48,7 @@ def load_video(path: Path) -> Document:
 
 
 def extract_audio_to_text(path: Path, settings: Settings | None = None) -> tuple[list[Section], str | None]:
-    """Spark Streaming: Extract Audio & Convert to Text.
+    """Extract Audio & Convert to Text.
 
     Whisper returns short segments (a sentence or so). They are grouped into sections of up to chunk_size
     characters, so each section usually becomes one chunk and keeps an accurate start time.
