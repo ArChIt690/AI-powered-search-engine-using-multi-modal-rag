@@ -14,8 +14,8 @@ PICTURES -> Image Embeddings (CLIP).
 import re
 from itertools import groupby
 
+import numpy as np
 from langchain_core.embeddings import Embeddings
-from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from search_engine.core.config import Settings, get_settings
@@ -26,6 +26,7 @@ from search_engine.schemas.document import Document, SectionKind
 _SMART_SEPARATORS = ["\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " ", ""]
 _RECORD_SEPARATOR = "\n\n"
 _LETTER = re.compile(r"[^\W\d_]")  # any letter, in any script
+_SENTENCE_END = re.compile(r"(?<=[.?!])\s+")
 
 
 def chunk_document(
@@ -82,20 +83,52 @@ def _split_prose(text: str, embeddings: Embeddings | None, settings: Settings) -
 
     if embeddings is None:
         raise ValueError("semantic chunking of prose needs an embeddings model (pass `embeddings`)")
-    semantic = SemanticChunker(
-        embeddings,
-        breakpoint_threshold_type="percentile",
-        breakpoint_threshold_amount=settings.semantic_breakpoint_percentile,
-        min_chunk_size=settings.semantic_min_chunk_size,
+    pieces = _semantic_split(
+        text, embeddings, settings.semantic_breakpoint_percentile, settings.semantic_min_chunk_size
     )
-    pieces = _merge_short_tail(semantic.split_text(text), settings.semantic_min_chunk_size, settings.chunk_size)
+    pieces = _merge_short_tail(pieces, settings.semantic_min_chunk_size, settings.chunk_size)
     # One long topic is still one semantic piece: split it again so no chunk exceeds chunk_size.
     smart = _smart(settings.chunk_size, settings.chunk_overlap)
     return [part for piece in pieces for part in (smart.split_text(piece) if len(piece) > settings.chunk_size else [piece])]
 
 
+def _semantic_split(text: str, embeddings: Embeddings, percentile: float, min_chunk_size: int) -> list[str]:
+    """Cut where the meaning shifts.
+
+    For each gap between two sentences, the two sentences before it are compared with the two after it (cosine
+    distance). Two sentences at a time, so one odd sentence doesn't look like a topic change, and the two sides
+    never overlap, so the biggest distance falls exactly on the gap where the topic changes. The text is cut at
+    gaps in the top (100 - percentile)% of distances, unless the piece so far is shorter than min_chunk_size.
+    """
+    sentences = [s for s in _SENTENCE_END.split(text) if s.strip()]
+    if len(sentences) < 2:
+        return [text]
+
+    gaps = range(len(sentences) - 1)  # gap g lies between sentence g and g + 1
+    before = [" ".join(sentences[max(0, g - 1) : g + 1]) for g in gaps]
+    after = [" ".join(sentences[g + 1 : g + 3]) for g in gaps]
+    unique = list(dict.fromkeys(before + after))  # most windows appear on both sides: embed each once
+    vectors = np.asarray(embeddings.embed_documents(unique), dtype=np.float32)
+    vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
+    index = {window: i for i, window in enumerate(unique)}
+    left = vectors[[index[w] for w in before]]
+    right = vectors[[index[w] for w in after]]
+    distances = 1.0 - np.sum(left * right, axis=1)
+    threshold = np.percentile(distances, percentile)
+
+    pieces: list[str] = []
+    current = [sentences[0]]
+    for sentence, distance in zip(sentences[1:], distances, strict=True):
+        if distance > threshold and len(" ".join(current)) >= min_chunk_size:
+            pieces.append(" ".join(current))
+            current = []
+        current.append(sentence)
+    pieces.append(" ".join(current))
+    return pieces
+
+
 def _merge_short_tail(pieces: list[str], min_chunk_size: int, chunk_size: int) -> list[str]:
-    """SemanticChunker's min_chunk_size doesn't apply to the final piece: merge it into the previous one if it fits."""
+    """min_chunk_size can't apply to the final piece while splitting: merge it into the previous one if it fits."""
     if min_chunk_size and len(pieces) > 1 and len(pieces[-1]) < min_chunk_size:
         merged = f"{pieces[-2]} {pieces[-1]}"
         if len(merged) <= chunk_size:

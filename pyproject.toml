@@ -11,7 +11,6 @@ dependencies = [
     "fastapi>=0.141.1",
     "faster-whisper>=1.2.1",
     "langchain-elasticsearch>=1.0.0",
-    "langchain-experimental>=0.4.2",
     "langchain-text-splitters>=1.1.2",
     "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
@@ -38,3 +37,5 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: loads the real embedding models (first run downloads them); run with `pytest -m slow`"]

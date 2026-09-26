@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     text_embedding_model: str = "BAAI/bge-small-en-v1.5"
     text_embedding_dim: int = 384
     text_query_instruction: str = "Represent this sentence for searching relevant passages: "  # BGE query prefix
-    image_embedding_dim: int = 512  # CLIP ViT-B/32, filled in Phase 3
+    clip_model: str = "clip-ViT-B-32"  # Image Embeddings (CLIP), via sentence-transformers
+    image_embedding_dim: int = 512  # CLIP ViT-B/32
     embedding_batch_size: int = 32
 
     # PDF separation of images, charts and tables
