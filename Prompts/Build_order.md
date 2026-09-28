@@ -172,20 +172,25 @@ Diagram boxes: *USER → QUERY, QUERY Enhancement, METADATA FILTERING, ELASTICSE
 REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
 
 1. `schemas/query.py`, `schemas/response.py`: request/response models (query, session id, filters; answer,
-   citations, cache source, guardrail reason).
-2. `retrieval/query_enhance.py`: **QUERY Enhancement** (LLM rewrite, expansion or HyDE).
+   citations, cache source, guardrail reason) ✅
+2. `retrieval/query_enhance.py`: **QUERY Enhancement**: one fast LLM call (free API: Groq or Gemini through
+   LangChain `init_chat_model`) that rewrites the query to stand alone, adds keywords and extracts filters; if the LLM fails, the query is searched
+   as typed ✅
 3. `retrieval/filters.py`: **METADATA FILTERING**, which turns the query or user options into filters on the
-   Part 1.4 fields (modality, file type, source, dates…).
-4. `retrieval/hybrid_search.py`: **ELASTICSEARCH HYBRID SEARCH** over the Vector Database, all through
-   **LangChain** (the two 1.5 stores + a LangChain BM25 retriever):
-   - **KEYWORD SEARCH (BM25)** on `text`
-   - **SEMANTIC SEARCH**: kNN on `text_embedding` (bge query embedding), plus kNN on `image_embedding` (CLIP text
-     encoder) so text queries find PDF charts, images and video frames
-   - LangChain's built-in `DenseVectorStrategy(hybrid=True)` was tested on the local ES and returns **403** (basic
-     license: "non-compliant for Reciprocal Rank Fusion"), so the lists are fused in the next step instead
+   Part 1.4 fields (modality, content, file type, file name, created date); the user's options win over the
+   query's ✅
+4. `retrieval/hybrid_search.py`: **ELASTICSEARCH HYBRID SEARCH** over the Vector Database, through
+   **LangChain's built-in hybrid search** on the two 1.5 stores:
+   - text store with `DenseVectorStrategy(hybrid=True, rrf=False)`: **KEYWORD SEARCH (BM25)** on `text` +
+     **SEMANTIC SEARCH** (kNN on `text_embedding`, bge query embedding) in one Elasticsearch query
+   - image store: kNN on `image_embedding` (CLIP text encoder), so text queries find PDF charts, images and video
+     frames
+   - `rrf=False` because ES's own RRF returns **403** on the basic license ("non-compliant for Reciprocal Rank
+     Fusion"); rank fusion is done in the next step instead
 5. `retrieval/rerank.py`: **RERANKING (RANKFUSION) using Cross Encoder Models**: rank fusion (RRF via LangChain's
-   `EnsembleRetriever`, from `langchain-classic`) of the BM25, text-kNN and image-kNN lists, then a **Cross
-   Encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N.
+   `EnsembleRetriever`, from `langchain-classic`) of the text-hybrid and image-kNN lists, then a **Cross
+   Encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N; image hits keep their fused place, since
+   the cross encoder only reads text.
 6. The cache boxes, **after Reranking and before the LLM**, in the diagram's order:
    - `retrieval/semantic_cache.py`, **FAISS SEMANTIC CACHE**: "checks if similar question in cache". HIT → USER,
      MISS → Redis.

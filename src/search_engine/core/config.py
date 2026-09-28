@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,8 +48,18 @@ class Settings(BaseSettings):
     semantic_breakpoint_percentile: float = 90.0  # higher = fewer, larger semantic chunks
     semantic_min_chunk_size: int = 200  # characters; avoids tiny one-sentence semantic chunks
 
+    # LLM: free APIs through LangChain `init_chat_model`; switch provider in .env, no code change
+    llm_provider: Literal["google_genai", "groq"] = "google_genai"
+    llm_model: str = "gemini-2.5-flash"  # groq: llama-3.3-70b-versatile
+    llm_fast_model: str | None = None  # Query Enhancement; defaults to llm_model (groq: llama-3.1-8b-instant)
+    llm_api_key: SecretStr | None = None
+    llm_temperature: float = 0.0
+    llm_timeout_s: float = 30.0
+    llm_max_retries: int = 2
+
     # Retrieval
     top_k: int = 10
+    session_history_turns: int = 3  # past question/answer pairs shown to Query Enhancement
 
 
 @lru_cache

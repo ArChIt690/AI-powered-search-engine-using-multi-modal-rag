@@ -11,6 +11,10 @@ class Modality(StrEnum):
     VIDEO_FRAME = "video_frame"
 
 
+# What a chunk holds: prose text, a table, CSV/JSON/XML records, or an image, chart or video frame.
+ContentKind = Literal["text", "table", "record", "image", "chart", "frame"]
+
+
 class ChunkMetadata(BaseModel):
     """The typed fields every chunk's `metadata` holds, set by Metadata Enrichment.
 
@@ -24,7 +28,7 @@ class ChunkMetadata(BaseModel):
     chunk_index: int = Field(description="Position of the chunk in its document: text chunks first, then pictures.")
     file_name: str = Field(description="File name with extension, e.g. 'report.pdf'.")
     file_type: str = Field(description="Short file type without the dot: pdf, md, csv, png, mp4...")
-    content: Literal["text", "table", "record", "image", "chart", "frame"] = Field(
+    content: ContentKind = Field(
         description="What the chunk holds: prose text, a table, CSV/JSON/XML records, or an image, chart or video frame.",
     )
     title: str = Field(description="PDF title when the file has one, otherwise the file name without its extension.")
