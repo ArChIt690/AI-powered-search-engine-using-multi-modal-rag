@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
 
     # Retrieval
-    top_k: int = 10
+    top_k: int = 10  # reranked chunks given to the LLM
+    retrieval_candidates: int = 30  # hits per list (text hybrid, image kNN) fetched for Reranking
     session_history_turns: int = 3  # past question/answer pairs shown to Query Enhancement
 
 

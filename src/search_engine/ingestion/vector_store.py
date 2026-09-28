@@ -66,13 +66,8 @@ class VectorStore:
         image_store: ElasticsearchStore | None = None,
     ):
         self.settings = settings or get_settings()
-        s = self.settings
-        self.text_store = text_store or _store(
-            s.es_text_index, "text_embedding", s.text_embedding_dim, text_embedder or TextEmbedder(s)
-        )
-        self.image_store = image_store or _store(
-            s.es_image_index, "image_embedding", s.image_embedding_dim, ClipTextEmbeddings()
-        )
+        self.text_store = text_store or build_text_store(self.settings, text_embedder)
+        self.image_store = image_store or build_image_store(self.settings)
 
     def write(self, chunks: list[Chunk]) -> int:
         """Vector Database. Replaces each document's chunks (old ones deleted first), then bumps the index version.
@@ -110,12 +105,28 @@ class VectorStore:
             logger.warning("Could not bump %s in Redis; cached answers expire by TTL only", self.settings.index_version_key)
 
 
-def _store(index: str, vector_field: str, dims: int, embedding) -> ElasticsearchStore:
+def build_text_store(
+    settings: Settings, text_embedder: TextEmbedder | None = None, strategy: DenseVectorStrategy | None = None
+) -> ElasticsearchStore:
+    """The text store. Retrieval passes a hybrid `strategy`; the index settings stay the ones ingestion creates."""
+    return _store(
+        settings.es_text_index, "text_embedding", settings.text_embedding_dim,
+        text_embedder or TextEmbedder(settings), strategy,
+    )
+
+
+def build_image_store(settings: Settings, clip: ClipTextEmbeddings | None = None) -> ElasticsearchStore:
+    return _store(settings.es_image_index, "image_embedding", settings.image_embedding_dim, clip or ClipTextEmbeddings())
+
+
+def _store(
+    index: str, vector_field: str, dims: int, embedding, strategy: DenseVectorStrategy | None = None
+) -> ElasticsearchStore:
     return ElasticsearchStore(
         index_name=index,
         client=get_es_client(),
         embedding=embedding,  # embeds search queries (Part 2); ingestion passes precomputed vectors
-        strategy=DenseVectorStrategy(),
+        strategy=strategy or DenseVectorStrategy(),
         vector_query_field=vector_field,
         query_field="text",
         num_dimensions=dims,

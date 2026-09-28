@@ -187,6 +187,7 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
      frames
    - `rrf=False` because ES's own RRF returns **403** on the basic license ("non-compliant for Reciprocal Rank
      Fusion"); rank fusion is done in the next step instead
+   - a store the filters rule out (e.g. only charts) or whose index doesn't exist yet is skipped ✅
 5. `retrieval/rerank.py`: **RERANKING (RANKFUSION) using Cross Encoder Models**: rank fusion (RRF via LangChain's
    `EnsembleRetriever`, from `langchain-classic`) of the text-hybrid and image-kNN lists, then a **Cross
    Encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N; image hits keep their fused place, since
