@@ -174,9 +174,9 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
 
 1. `schemas/query.py`, `schemas/response.py`: request/response models (query, session id, filters; answer,
    citations, cache source, guardrail reason) ✅
-2. `retrieval/query_enhance.py`: **QUERY Enhancement**: one fast LLM call (free API: Groq or Gemini through
-   LangChain `init_chat_model`) that rewrites the query to stand alone, adds keywords and extracts filters; if
-   the LLM fails, the query is searched as typed ✅
+2. `retrieval/query_enhance.py`: **QUERY Enhancement**: one fast LLM call (free API: Groq by default, Gemini through
+   LangChain `init_chat_model`; Groq `openai/gpt-oss-20b`, JSON-schema structured output) that rewrites the query
+   to stand alone, adds keywords and extracts filters; if the LLM fails, the query is searched as typed ✅
 3. `retrieval/filters.py`: **METADATA FILTERING**, which turns the query or user options into filters on the
    Part 1.4 fields (modality, content, file type, file name, created date); the user's options win over the
    query's ✅
@@ -191,7 +191,8 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
    - a store the filters rule out (e.g. only charts) or whose index doesn't exist yet is skipped ✅
 5. `retrieval/rerank.py`: **RERANKING (RANKFUSION) using Cross Encoder Models**: rank fusion (RRF via LangChain's
    `EnsembleRetriever`, from `langchain-classic`, merged by chunk id) of the text-hybrid and image-kNN lists, then
-   a **Cross Encoder** (LangChain `CrossEncoderReranker`, local model `RERANK_MODEL`) over the fused text hits.
+   a **Cross Encoder** (LangChain `CrossEncoderReranker`, local `cross-encoder/ms-marco-MiniLM-L6-v2`, chosen over
+   `bge-reranker-base` on the eval/ numbers: same or better, 3.5x faster, 1/14 the memory) over the fused text hits.
    The cross encoder reads text only, so up to `rerank_image_slots` (2) image hits follow the text hits; when
    only pictures match (e.g. only charts asked for) they fill the list. Images go after text because CLIP's
    text-to-image scores barely separate matching from unrelated pictures (measured: 0.637 for the matching chart,
@@ -212,7 +213,8 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
    - Only LLM answers with citations are cached. A cache error is a MISS; without the index version the caches
      are skipped.
 7. **LLM** box: `llm/agent.py` `LLMAgent.answer()`, a direct call with the numbered chunks (file, page / video
-   time, content; pictures by their description only), citing [n]. `retrieval/pipeline.py` `SearchPipeline`
+   time, content; pictures by their description only), citing [n] (Groq `openai/gpt-oss-120b`; its `【n】`
+   citations are rewritten to [n]). `retrieval/pipeline.py` `SearchPipeline`
    connects every box in the diagram's order; citations are the chunks the answer cites. An LLM failure
    (Gemini 503 / 429) raises `LLMUnavailableError`. Part 3 replaces the inside of `answer()` ✅
 8. `api/`: FastAPI `POST /search`, `GET /health`; models loaded and warmed at startup

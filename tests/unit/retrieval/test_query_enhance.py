@@ -11,10 +11,10 @@ class FakeLLM:
     prompt it was given."""
 
     def __init__(self, result=None, error: Exception | None = None):
-        self.result, self.error, self.prompts, self.schema = result, error, [], None
+        self.result, self.error, self.prompts, self.schema, self.method = result, error, [], None, None
 
-    def with_structured_output(self, schema):
-        self.schema = schema
+    def with_structured_output(self, schema, method=None):
+        self.schema, self.method = schema, method
         return RunnableLambda(self._respond)
 
     def _respond(self, prompt):
@@ -34,7 +34,7 @@ def test_returns_the_llms_rewrite_keywords_and_filters():
 
     enhanced = QueryEnhancer(Settings(), llm=llm).enhance("what does that chart show?")
 
-    assert llm.schema is EnhancedQuery
+    assert llm.schema is EnhancedQuery and llm.method == "json_schema"
     assert enhanced.query == "What revenue does the chart in report.pdf show?"
     assert enhanced.keywords == ["sales", "a", "b", "c", "d"]  # trimmed, blanks dropped, at most 5
     assert enhanced.filters.content == ["chart"]

@@ -71,3 +71,13 @@ USER ── Sessional Queries ──► Redis
   | + cross encoder, MiniLM-L6 | 0.84 | 0.88 | 1.00 | 0.873 |
 - **Free Gemini limits hit in practice:** `gemini-3.8-flash` 503 (overloaded) on every call;
   `gemini-2.5-flash` 5 requests/minute (429). Both surface as `LLMUnavailableError` → HTTP 503 with the reason.
+
+## Decisions after the measurements (2026-09-29, user)
+- Cross encoder: `cross-encoder/ms-marco-MiniLM-L6-v2` (default `RERANK_MODEL`).
+- LLM: Groq, `openai/gpt-oss-120b` (answers) and `openai/gpt-oss-20b` (Query Enhancement). The Llama models were
+  retired from Groq; the account offers gpt-oss-120b/20b, qwen3.8-27b and allam-2-7b. Gemini stays available
+  through `LLM_PROVIDER=google_genai`.
+- gpt-oss cites as `【1】` / `【1†L3-L5】`: `llm/agent.py` rewrites them to `[1]`, and the prompt asks for `[n]`.
+- Query Enhancement uses `with_structured_output(method="json_schema")`: with tool calling, gpt-oss sometimes
+  named the tool `functions.EnhancedQuery` and the reply was rejected (2 of 6 real questions); json_schema gave
+  20/20 at ~1 s per call.

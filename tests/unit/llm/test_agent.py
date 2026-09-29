@@ -55,6 +55,15 @@ def test_answer_sends_question_context_and_history_to_the_llm():
     assert "User: earlier question" in seen[0] and "Cite every claim" in seen[0]
 
 
+def test_gpt_oss_style_citations_become_square_brackets():
+    llm = GenericFakeChatModel(messages=iter([AIMessage("North leads 【1】, the chart 【3†L1-L2】 and 【1, 2】.")]))
+
+    answer = LLMAgent(llm=llm).answer("q", CHUNKS)
+
+    assert answer == "North leads [1], the chart [3] and [1, 2]."
+    assert cited_numbers(answer, count=3) == [1, 3, 2]
+
+
 def test_llm_errors_and_empty_answers_raise_llm_unavailable():
     class Failing:
         def invoke(self, prompt):

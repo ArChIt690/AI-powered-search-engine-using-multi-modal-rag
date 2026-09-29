@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     semantic_min_chunk_size: int = 200  # characters; avoids tiny one-sentence semantic chunks
 
     # LLM: free APIs through LangChain `init_chat_model`; switch provider in .env, no code change
-    llm_provider: Literal["google_genai", "groq"] = "google_genai"
-    llm_model: str = "gemini-2.5-flash"  # groq: llama-3.3-70b-versatile
-    llm_fast_model: str | None = None  # Query Enhancement; defaults to llm_model (groq: llama-3.1-8b-instant)
+    llm_provider: Literal["groq", "google_genai"] = "groq"
+    llm_model: str = "openai/gpt-oss-120b"  # google_genai: gemini-2.5-flash
+    llm_fast_model: str | None = "openai/gpt-oss-20b"  # Query Enhancement; None = llm_model
     llm_api_key: SecretStr | None = None
     llm_temperature: float = 0.0
     llm_timeout_s: float = 30.0
@@ -63,7 +63,9 @@ class Settings(BaseSettings):
     session_history_turns: int = 3  # past question/answer pairs shown to Query Enhancement and the LLM
 
     # Reranking
-    rerank_model: str = "BAAI/bge-reranker-base"  # cross encoder, local
+    # Cross encoder, local. MiniLM-L6 matched or beat BAAI/bge-reranker-base on eval/ at ~1/3 of the time and
+    # ~1/14 of the memory (0.95 s vs 3.3 s per question, ~0.1 GB vs 1.4 GB on this CPU).
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
     rerank_image_slots: int = 2  # best fused image hits kept, after the text hits (the cross encoder reads text only)
 
     # FAISS Semantic Cache ("similar question")

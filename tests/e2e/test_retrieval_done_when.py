@@ -30,7 +30,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.integration]
 class _TypedQueryLLM:
     """Query Enhancement stand-in: the query as typed, no keywords or filters."""
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, method=None):
         return RunnableLambda(lambda prompt: EnhancedQuery(query=prompt.to_string().rsplit("Latest question: ", 1)[1]))
 
 
