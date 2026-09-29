@@ -101,7 +101,8 @@ def test_redis_down_does_not_fail_the_write(monkeypatch, setup, caplog):
 def test_metadata_mappings_cover_every_chunk_metadata_field_with_the_right_type():
     mappings = metadata_mappings()
 
-    assert set(ChunkMetadata.model_fields) | {"modality", "page", "timestamp"} == set(mappings)
+    assert set(ChunkMetadata.model_fields) | {"source", "modality", "page", "timestamp"} == set(mappings)
+    assert mappings["source"]["type"] == "keyword"
     assert mappings["page"]["type"] == "integer"
     assert mappings["chunk_index"]["type"] == "integer"
     assert mappings["duration_s"]["type"] == "float"
@@ -110,10 +111,10 @@ def test_metadata_mappings_cover_every_chunk_metadata_field_with_the_right_type(
     assert mappings["title"]["type"] == "text" and "keyword" in mappings["title"]["fields"]
 
 
-def test_document_metadata_adds_modality_page_timestamp_and_skips_missing():
+def test_document_metadata_adds_source_modality_page_timestamp_and_skips_missing():
     chunk = Chunk(text="t", source="/v.mp4", modality=Modality.VIDEO_FRAME, timestamp=5.0, metadata={"doc_id": "x"})
 
-    assert document_metadata(chunk) == {"doc_id": "x", "modality": "video_frame", "timestamp": 5.0}
+    assert document_metadata(chunk) == {"doc_id": "x", "source": "/v.mp4", "modality": "video_frame", "timestamp": 5.0}
 
 
 def test_real_stores_use_langchain_with_the_right_fields(monkeypatch):

@@ -1,0 +1,7 @@
+<solar_system>
+  <planet><name>Mercury</name><moons>0</moons><day_length_hours>4222.6</day_length_hours></planet>
+  <planet><name>Venus</name><moons>0</moons><day_length_hours>2802.0</day_length_hours></planet>
+  <planet><name>Mars</name><moons>2</moons><day_length_hours>24.7</day_length_hours></planet>
+  <planet><name>Jupiter</name><moons>95</moons><day_length_hours>9.9</day_length_hours></planet>
+  <planet><name>Saturn</name><moons>146</moons><day_length_hours>10.7</day_length_hours></planet>
+</solar_system>

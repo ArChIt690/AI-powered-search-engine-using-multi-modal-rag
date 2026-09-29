@@ -1,0 +1,7 @@
+[
+  {"sku": "LMP-01", "name": "Desk lamp", "category": "lighting", "price_eur": 39.9, "stock": 120},
+  {"sku": "CHR-07", "name": "Ergonomic office chair", "category": "furniture", "price_eur": 249.0, "stock": 15},
+  {"sku": "KBD-12", "name": "Mechanical keyboard", "category": "peripherals", "price_eur": 89.5, "stock": 64},
+  {"sku": "MON-27", "name": "27 inch 4K monitor", "category": "displays", "price_eur": 329.0, "stock": 22},
+  {"sku": "HDP-03", "name": "Noise cancelling headphones", "category": "audio", "price_eur": 199.0, "stock": 41}
+]

@@ -1,5 +1,6 @@
 """USER -> QUERY: what a search request carries, and what QUERY Enhancement makes of it."""
 
+import re
 from datetime import date
 
 from pydantic import BaseModel, Field, field_validator
@@ -84,6 +85,12 @@ class EnhancedQuery(BaseModel):
 
     @property
     def search_text(self) -> str:
-        """What the hybrid search runs on: the rewritten query plus the new keywords."""
-        extra = [word for word in self.keywords if word.lower() not in self.query.lower()]
+        """What the hybrid search runs on: the rewritten query plus the keywords it doesn't already contain
+        (whole words: "go" is new next to "goroutines")."""
+        present = set(_words(self.query))
+        extra = [keyword for keyword in self.keywords if not set(_words(keyword)) <= present]
         return " ".join([self.query, *extra])
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())

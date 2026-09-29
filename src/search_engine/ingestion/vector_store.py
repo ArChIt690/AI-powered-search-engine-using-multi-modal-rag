@@ -35,6 +35,7 @@ _DATE_FIELDS = {"created", "file_modified", "ingested_at"}
 def metadata_mappings() -> dict[str, dict[str, Any]]:
     """Elasticsearch types for every `metadata.*` field, generated from ChunkMetadata so the two never drift."""
     mappings: dict[str, dict[str, Any]] = {
+        "source": {"type": "keyword"},  # the file's path, for citations
         "modality": {"type": "keyword"},
         "page": {"type": "integer"},
         "timestamp": {"type": "float"},
@@ -51,8 +52,8 @@ def metadata_mappings() -> dict[str, dict[str, Any]]:
 
 
 def document_metadata(chunk: Chunk) -> dict[str, Any]:
-    """What a chunk stores under `metadata`: its ChunkMetadata fields plus modality, page and timestamp."""
-    extra = {"modality": chunk.modality.value, "page": chunk.page, "timestamp": chunk.timestamp}
+    """What a chunk stores under `metadata`: its ChunkMetadata fields plus source, modality, page and timestamp."""
+    extra = {"source": chunk.source, "modality": chunk.modality.value, "page": chunk.page, "timestamp": chunk.timestamp}
     return {**chunk.metadata, **{key: value for key, value in extra.items() if value is not None}}
 
 

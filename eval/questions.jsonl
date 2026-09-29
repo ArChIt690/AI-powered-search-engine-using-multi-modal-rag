@@ -1,0 +1,25 @@
+{"question": "How much stack does a goroutine start with?", "file": "go_concurrency.md", "contains": "few kilobytes", "kind": "meaning"}
+{"question": "How do goroutines talk to each other?", "file": "go_concurrency.md", "contains": "typed pipes", "kind": "meaning"}
+{"question": "When does an unbuffered channel block?", "file": "go_concurrency.md", "contains": "unbuffered channel blocks", "kind": "keyword"}
+{"question": "wait on several channel operations at the same time", "file": "go_concurrency.md", "contains": "select statement", "kind": "meaning"}
+{"question": "How do I wait until all my goroutines have finished?", "file": "go_concurrency.md", "contains": "waitgroup", "kind": "meaning"}
+{"question": "stop two goroutines changing shared memory at once", "file": "go_concurrency.md", "contains": "sync.mutex", "kind": "meaning"}
+{"question": "Why unlock a mutex with defer?", "file": "go_concurrency.md", "contains": "defer", "kind": "keyword"}
+{"question": "What oven temperature does the sponge cake need?", "file": "baking.txt", "contains": "180 degrees", "kind": "keyword"}
+{"question": "How long do the sponges bake for?", "file": "baking.txt", "contains": "25 minutes", "kind": "keyword"}
+{"question": "what goes between the two layers of the cake", "file": "baking.txt", "contains": "raspberry jam", "kind": "meaning"}
+{"question": "how long does the cake stay fresh", "file": "baking.txt", "contains": "two days", "kind": "meaning"}
+{"question": "Who works in Rome?", "file": "employees.csv", "contains": "bob rossi", "kind": "record"}
+{"question": "Which employee is on the security team?", "file": "employees.csv", "contains": "farah haddad", "kind": "record"}
+{"question": "Who joined the company in 2018?", "file": "employees.csv", "contains": "chen wei", "kind": "record"}
+{"question": "machine learning engineer based in Asia", "file": "employees.csv", "contains": "singapore", "kind": "record"}
+{"question": "How much does the ergonomic chair cost?", "file": "products.json", "contains": "249", "kind": "record"}
+{"question": "price of the noise cancelling headphones", "file": "products.json", "contains": "199", "kind": "record"}
+{"question": "How many moons does Saturn have?", "file": "planets.xml", "contains": "146", "kind": "record"}
+{"question": "Which planet has the shortest day?", "file": "planets.xml", "contains": "jupiter", "kind": "record"}
+{"question": "What was the revenue of the East region?", "file": "report.pdf", "contains": "143", "kind": "table"}
+{"question": "Which region had the lowest revenue?", "file": "report.pdf", "contains": "west", "kind": "table"}
+{"question": "Did revenue go up this quarter?", "file": "report.pdf", "contains": "rose in every region", "kind": "meaning"}
+{"question": "a photo of an orange sunset", "file": "sunset.png", "content": "image", "kind": "image"}
+{"question": "a picture of a green forest", "file": "forest.png", "content": "image", "kind": "image"}
+{"question": "bar chart of revenue by region", "file": "report.pdf", "content": "chart", "kind": "image"}

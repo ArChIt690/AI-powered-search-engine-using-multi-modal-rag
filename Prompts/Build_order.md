@@ -67,7 +67,7 @@ One installable package, `src/search_engine/`. Each folder is a diagram region a
 |---|---|
 | `core/` | `config.py` (pydantic-settings reading `.env`), `logging.py`, `exceptions.py` |
 | `schemas/` | Pydantic models shared by all three parts (`Document`, `Chunk`, `ChunkMetadata`, query, response, eval) |
-| `infra/` | Clients built once: `elasticsearch.py`, `redis.py`, `faiss_index.py`, `llm_client.py`, `models.py` (bge, CLIP, Whisper, cross-encoder) |
+| `infra/` | Clients built once: `elasticsearch.py`, `redis.py`, `llm_client.py`, `models.py` (bge, CLIP, Whisper, cross-encoder) |
 | `ingestion/` | **Ingestion pipeline**: `sources/`, `chunking.py`, `text_embed.py`, `image_embed.py`, `enrichment.py`, `vector_store.py`, `pipeline.py` |
 | `retrieval/` | **Retrieval pipeline**: `query_enhance.py`, `filters.py`, `hybrid_search.py`, `rerank.py`, `semantic_cache.py`, `prompt_cache.py`, `session.py`, `pipeline.py` |
 | `llm/` | **LLM Architecture**: `agent.py`, `mcp.py`, `tools/`, `guardrail.py`, `eval.py`, `eval_store.py`, `pipeline.py` |
@@ -76,8 +76,8 @@ One installable package, `src/search_engine/`. Each folder is a diagram region a
 | `tests/unit/` | Mirrors `src/`, no Docker needed; `-m slow` runs the real models |
 | `tests/integration/` | Real Elasticsearch + Redis from `docker-compose.yml` (skipped when not running) |
 | `tests/e2e/` | File in → answer out; one test per part's "Done when" |
-| `eval/` | Dev-only retrieval benchmark (recall@k, MRR). Not the EVAL box. |
-| `data/` | Git-ignored runtime data: `eval_results/` |
+| `eval/` | Dev-only retrieval benchmark (`corpus/`, `questions.jsonl`, `run.py`: recall@k, MRR). Not the EVAL box. |
+| `data/` | Git-ignored runtime data: `faiss_cache/` (FAISS Semantic Cache), `eval_results/` |
 | `docs/` | `Search_Engine_Architecture.drawio` |
 | `Prompts/` | This file and the approved plans (`Prompts/plans/`) |
 
@@ -146,7 +146,8 @@ the same Elasticsearch, because a LangChain store manages one vector field per i
 
 LangChain creates each index (`DenseVectorStrategy`, `metadata_mappings` generated from `ChunkMetadata`, English
 default analyzer for the BM25 `text` field) and does every write (`add_embeddings` with the precomputed vectors).
-Documents are `{text, <vector>, metadata: {ChunkMetadata fields + modality, page, timestamp}}`. Re-ingesting a file
+Documents are `{text, <vector>, metadata: {ChunkMetadata fields + source, modality, page, timestamp}}`
+(`source`, the file path, added in Part 2 for citations: re-ingest older files to fill it). Re-ingesting a file
 deletes its old chunks by `doc_id` first. Each write bumps the Redis counter `search:index_version`, so cached
 answers can be dropped when the corpus changes.
 
@@ -165,7 +166,7 @@ and video frames, each with the right `modality`.
 
 ---
 
-## Part 2: Retrieval pipeline (end to end)
+## Part 2: Retrieval pipeline (end to end) ✅
 
 Diagram boxes: *USER → QUERY, QUERY Enhancement, METADATA FILTERING, ELASTICSEARCH HYBRID SEARCH (KEYWORD SEARCH
 (BM25) + SEMANTIC SEARCH), RERANKING (RANKFUSION) using Cross Encoder Models, FAISS SEMANTIC CACHE (HIT/MISS),
@@ -174,8 +175,8 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
 1. `schemas/query.py`, `schemas/response.py`: request/response models (query, session id, filters; answer,
    citations, cache source, guardrail reason) ✅
 2. `retrieval/query_enhance.py`: **QUERY Enhancement**: one fast LLM call (free API: Groq or Gemini through
-   LangChain `init_chat_model`) that rewrites the query to stand alone, adds keywords and extracts filters; if the LLM fails, the query is searched
-   as typed ✅
+   LangChain `init_chat_model`) that rewrites the query to stand alone, adds keywords and extracts filters; if
+   the LLM fails, the query is searched as typed ✅
 3. `retrieval/filters.py`: **METADATA FILTERING**, which turns the query or user options into filters on the
    Part 1.4 fields (modality, content, file type, file name, created date); the user's options win over the
    query's ✅
@@ -189,24 +190,41 @@ REDIS PROMPT CACHING (HIT/MISS), Sessional Queries → REDIS, LLM.*
      Fusion"); rank fusion is done in the next step instead
    - a store the filters rule out (e.g. only charts) or whose index doesn't exist yet is skipped ✅
 5. `retrieval/rerank.py`: **RERANKING (RANKFUSION) using Cross Encoder Models**: rank fusion (RRF via LangChain's
-   `EnsembleRetriever`, from `langchain-classic`) of the text-hybrid and image-kNN lists, then a **Cross
-   Encoder** (`BAAI/bge-reranker-base`, local) over the fused top-N; image hits keep their fused place, since
-   the cross encoder only reads text.
-6. The cache boxes, **after Reranking and before the LLM**, in the diagram's order:
-   - `retrieval/semantic_cache.py`, **FAISS SEMANTIC CACHE**: "checks if similar question in cache". HIT → USER,
-     MISS → Redis.
+   `EnsembleRetriever`, from `langchain-classic`, merged by chunk id) of the text-hybrid and image-kNN lists, then
+   a **Cross Encoder** (LangChain `CrossEncoderReranker`, local model `RERANK_MODEL`) over the fused text hits.
+   The cross encoder reads text only, so up to `rerank_image_slots` (2) image hits follow the text hits; when
+   only pictures match (e.g. only charts asked for) they fill the list. Images go after text because CLIP's
+   text-to-image scores barely separate matching from unrelated pictures (measured: 0.637 for the matching chart,
+   0.645 for an unrelated query), so no score cut-off works ✅
+6. The cache boxes, **after Reranking and before the LLM**, in the diagram's order ✅
+   - `retrieval/semantic_cache.py`, **FAISS SEMANTIC CACHE**: "checks if similar question in cache". LangChain
+     `FAISS` on the bge embedding of the rewritten question; HIT when cosine ≥ 0.92 with the same filters. The
+     cache belongs to one corpus version (`search:index_version`): a new ingest empties it. Saved in
+     `data/faiss_cache/`. HIT → USER, MISS → Redis.
    - `retrieval/prompt_cache.py`, **REDIS PROMPT CACHING**: "checks if exact prompt or similar prompt there or not".
-     Exact = hash of the normalized prompt; similar = Redis vector search over prompt embeddings. HIT → USER,
-     MISS → LLM.
-   - `retrieval/session.py`, **Sessional Queries**: the USER's queries in the current session, stored in Redis
-     (keyed by session id, with a TTL). They feed the prompt cache and give the LLM conversation context.
-7. **LLM** box: `retrieval/pipeline.py` hands the prompt to `llm/agent.py`. In this part that is a direct LLM call
-   with the reranked chunks as context. Part 3 replaces it with the full LLM Architecture behind the same function.
-8. `api/routes/search.py`: FastAPI `/search` (USER → QUERY → answer), and `search-engine search "<query>"`.
-9. `eval/`: 20–30 questions with known answers to measure recall@k and MRR while tuning (a dev tool, not the EVAL box).
+     Prompt = rewritten question + reranked chunk ids. Exact = LangChain `RedisCache`; similar = `redisvl`
+     `SemanticCache` (the library under langchain-redis), a similar question **with the same chunks** (tag filter;
+     langchain-redis' own class only checks the single nearest entry). Model + corpus version in every key, 24 h
+     TTL. HIT → USER, MISS → LLM.
+   - `retrieval/session.py`, **Sessional Queries**: `RedisChatMessageHistory` (langchain-community; the
+     langchain-redis class is deprecated and fails with redis-py 8), per session id, 1 h TTL. Feeds Query
+     Enhancement and the LLM.
+   - Only LLM answers with citations are cached. A cache error is a MISS; without the index version the caches
+     are skipped.
+7. **LLM** box: `llm/agent.py` `LLMAgent.answer()`, a direct call with the numbered chunks (file, page / video
+   time, content; pictures by their description only), citing [n]. `retrieval/pipeline.py` `SearchPipeline`
+   connects every box in the diagram's order; citations are the chunks the answer cites. An LLM failure
+   (Gemini 503 / 429) raises `LLMUnavailableError`. Part 3 replaces the inside of `answer()` ✅
+8. `api/`: FastAPI `POST /search`, `GET /health`; models loaded and warmed at startup
+   (`uv run uvicorn search_engine.api.app:app`). CLI: `search-engine search "<query>" [--session] [--file-type]
+   [--file-name] [--modality] [--content] [--top-k]` ✅
+9. `eval/`: 25 questions over `eval/corpus/` (+ a generated PDF with a table and a chart, and two photos);
+   `uv run python -m eval.run [--enhance] [--rerank-model M]` prints recall@1/5/10, MRR and time per stage (text
+   hybrid → + image search, RRF → + cross encoder). Retrieval only: no LLM tokens unless `--enhance` ✅
 
 **Done when:** a question returns a cited answer produced from reranked hybrid results (text and image hits), and
-asking the same or a similar question again is answered from the FAISS or Redis cache without calling the LLM.
+asking the same or a similar question again is answered from the FAISS or Redis cache without calling the LLM. ✅
+(`tests/e2e/test_retrieval_done_when.py`; real run with Gemini through the CLI and the API)
 
 ---
 

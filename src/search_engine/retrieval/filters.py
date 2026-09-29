@@ -3,6 +3,8 @@
 The clauses go into both hybrid searches (text and image store), on the `metadata.*` fields 1.5 maps.
 """
 
+import hashlib
+import json
 from typing import Any
 
 from search_engine.schemas.query import SearchFilters
@@ -41,6 +43,14 @@ def to_es_filter(filters: SearchFilters) -> list[dict[str, Any]]:
     if created:
         clauses.append({"range": {_CREATED_FIELD: created}})
     return clauses
+
+
+def filters_key(filters: SearchFilters) -> str:
+    """A short stable key for a set of filters (value order ignored), so cached answers are reused only for the
+    same filters: "revenue in the PDFs" must not get the answer cached for "revenue in the video"."""
+    data = filters.model_dump(mode="json")
+    normalised = {name: sorted(value) if isinstance(value, list) else value for name, value in data.items()}
+    return hashlib.sha1(json.dumps(normalised, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def es_fields() -> set[str]:

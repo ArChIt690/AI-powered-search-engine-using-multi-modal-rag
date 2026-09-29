@@ -47,3 +47,27 @@ USER ── Sessional Queries ──► Redis
 - Unit per box (fake LLM, fake stores); integration on real ES + Redis.
 - E2E "Done when": ingest the 8-file corpus, ask → cited answer with text and image hits; ask again → from cache,
   no LLM call.
+
+## What changed while building steps 5–9 (2026-09-29, from measurements)
+- **Image cut-off dropped.** CLIP's text-to-image scores don't separate matches from unrelated pictures (0.637
+  for the matching bar chart vs 0.645 for "who works in Rome"), so no threshold works. Image hits (up to 2) go
+  **after** the reranked text hits instead of at their fused rank, so they never push text evidence out; when
+  only pictures match, they fill the list. Making pictures rankable needs a text caption per picture at ingestion.
+- **Similar-prompt cache** uses `redisvl` `SemanticCache` with a `context_key` tag (the planned fallback):
+  `RedisSemanticCache.lookup` checks only the single nearest entry, so a nearer entry with other chunks hid a
+  valid hit.
+- **Sessions** use langchain-community's `RedisChatMessageHistory`: the langchain-redis one is deprecated and
+  fails with redis-py 8.
+- **`source` (file path) added to the ES metadata** in `vector_store.document_metadata`, for citations.
+- **`search_text`** compares keywords as whole words ("go" is new next to "goroutines").
+- **Cross encoder cost on this CPU:** `bge-reranker-base` 2.5–3.3 s per question and 1.4 GB RAM;
+  `ms-marco-MiniLM-L6-v2` ~0.95 s and ~0.1 GB, with equal or better recall/MRR on the benchmark:
+
+  | Stage | R@1 | R@5 | R@10 | MRR@10 |
+  |---|---|---|---|---|
+  | text hybrid search | 0.84 | 0.88 | 0.88 | 0.860 |
+  | + image search, RRF | 0.84 | 1.00 | 1.00 | 0.903 |
+  | + cross encoder, bge-reranker-base | 0.80 | 0.88 | 1.00 | 0.853 |
+  | + cross encoder, MiniLM-L6 | 0.84 | 0.88 | 1.00 | 0.873 |
+- **Free Gemini limits hit in practice:** `gemini-3.8-flash` 503 (overloaded) on every call;
+  `gemini-2.5-flash` 5 requests/minute (429). Both surface as `LLMUnavailableError` → HTTP 503 with the reason.

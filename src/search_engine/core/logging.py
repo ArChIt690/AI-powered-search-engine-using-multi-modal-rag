@@ -1,7 +1,7 @@
 import logging
 
 # Libraries that log every HTTP request at INFO.
-_NOISY_LOGGERS = ("httpx", "elastic_transport", "huggingface_hub", "sentence_transformers")
+_NOISY_LOGGERS = ("httpx", "elastic_transport", "huggingface_hub", "sentence_transformers", "faiss", "redisvl")
 
 
 def setup_logging(level: str = "INFO") -> None:

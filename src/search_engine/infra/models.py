@@ -7,6 +7,7 @@ from search_engine.core.config import get_settings
 
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
+    from langchain_community.cross_encoders import HuggingFaceCrossEncoder
     from sentence_transformers import SentenceTransformer
 
 
@@ -22,6 +23,14 @@ def get_clip_model() -> "SentenceTransformer":
     """CLIP: Image Embeddings, and its text encoder for text-to-image search."""
     settings = get_settings()
     return _sentence_transformer(settings.clip_model, settings.image_embedding_dim, "image_embedding_dim")
+
+
+@lru_cache
+def get_cross_encoder() -> "HuggingFaceCrossEncoder":
+    """The cross encoder for RERANKING, as a LangChain cross encoder (scores query-chunk pairs)."""
+    from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
+    return HuggingFaceCrossEncoder(model_name=get_settings().rerank_model, model_kwargs={"device": _device("auto")})
 
 
 def _sentence_transformer(name: str, expected_dim: int, setting: str) -> "SentenceTransformer":

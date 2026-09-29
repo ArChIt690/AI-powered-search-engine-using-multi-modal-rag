@@ -51,6 +51,7 @@ def test_search_text_adds_only_new_keywords():
 
     assert enhanced.search_text == "How do Go goroutines work? concurrency threads"
     assert EnhancedQuery(query="plain").search_text == "plain"
+    assert EnhancedQuery(query="goroutines?", keywords=["go", "Goroutines"]).search_text == "goroutines? go"
 
 
 def test_response_round_trips():

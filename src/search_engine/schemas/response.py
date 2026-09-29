@@ -13,6 +13,7 @@ class AnswerSource(StrEnum):
     FAISS_SEMANTIC_CACHE = "faiss_semantic_cache"  # similar question answered before
     REDIS_PROMPT_CACHE = "redis_prompt_cache"  # exact or similar prompt answered before
     LLM = "llm"
+    NO_RESULTS = "no_results"  # nothing matched the query and filters, so the LLM wasn't called
 
 
 class Citation(BaseModel):
@@ -37,3 +38,10 @@ class SearchResponse(BaseModel):
     source: AnswerSource
     session_id: str | None = None
     guardrail_reason: str | None = Field(default=None, description="Why GUARDRAIL blocked the answer (Part 3).")
+
+
+class CachedAnswer(BaseModel):
+    """What the FAISS Semantic Cache and Redis Prompt Caching store and return on a HIT."""
+
+    answer: str
+    citations: list[Citation] = Field(default_factory=list)

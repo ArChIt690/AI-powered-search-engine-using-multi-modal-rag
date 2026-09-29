@@ -62,7 +62,7 @@ class HybridSearch:
             "images": (self.image_store, s.es_image_index, _allows(filters, _IMAGE_MODALITIES, _IMAGE_CONTENT)),
         }
         return {
-            name: store.as_retriever(search_kwargs=self._search_kwargs(clauses))
+            name: store.as_retriever(**self._retriever_args(clauses))
             for name, (store, index, allowed) in wanted.items()
             if allowed and store.client.indices.exists(index=index)
         }
@@ -72,10 +72,10 @@ class HybridSearch:
         found = {name: retriever.invoke(query) for name, retriever in self.retrievers(filters or SearchFilters()).items()}
         return HybridResults(text=found.get("text", []), images=found.get("images", []))
 
-    def _search_kwargs(self, clauses: list[dict[str, Any]]) -> dict[str, Any]:
+    def _retriever_args(self, clauses: list[dict[str, Any]]) -> dict[str, Any]:
         k = self.settings.retrieval_candidates
         # num_candidates (fetch_k) > k gives the approximate kNN a wider pool, so filtered searches still fill k.
-        return {"k": k, "fetch_k": max(100, 2 * k), "filter": clauses, "doc_builder": to_document}
+        return {"search_kwargs": {"k": k, "fetch_k": max(100, 2 * k), "filter": clauses, "doc_builder": to_document}}
 
 
 def to_document(hit: dict[str, Any]) -> Document:

@@ -60,7 +60,21 @@ class Settings(BaseSettings):
     # Retrieval
     top_k: int = 10  # reranked chunks given to the LLM
     retrieval_candidates: int = 30  # hits per list (text hybrid, image kNN) fetched for Reranking
-    session_history_turns: int = 3  # past question/answer pairs shown to Query Enhancement
+    session_history_turns: int = 3  # past question/answer pairs shown to Query Enhancement and the LLM
+
+    # Reranking
+    rerank_model: str = "BAAI/bge-reranker-base"  # cross encoder, local
+    rerank_image_slots: int = 2  # best fused image hits kept, after the text hits (the cross encoder reads text only)
+
+    # FAISS Semantic Cache ("similar question")
+    semantic_cache_threshold: float = 0.92  # cosine between the rewritten questions
+    semantic_cache_dir: str = "data/faiss_cache"
+    semantic_cache_max_entries: int = 10_000  # cleared when full
+
+    # Redis Prompt Caching ("exact or similar prompt") and Sessional Queries
+    prompt_cache_ttl_s: int = 24 * 3600
+    prompt_cache_distance: float = 0.15  # cosine distance for "similar prompt" (same retrieved chunks only)
+    session_ttl_s: int = 3600  # renewed on each question
 
 
 @lru_cache
