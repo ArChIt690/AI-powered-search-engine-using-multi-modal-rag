@@ -5,6 +5,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from search_engine.schemas.chunk import Modality
+from search_engine.schemas.eval import EvalResult
 
 
 class AnswerSource(StrEnum):
@@ -14,6 +15,7 @@ class AnswerSource(StrEnum):
     REDIS_PROMPT_CACHE = "redis_prompt_cache"  # exact or similar prompt answered before
     LLM = "llm"
     NO_RESULTS = "no_results"  # nothing matched the query and filters, so the LLM wasn't called
+    GUARDRAIL_BLOCKED = "guardrail_blocked"  # the LLM's answer was UNSAFE; the user gets the reason instead
 
 
 class Citation(BaseModel):
@@ -37,7 +39,9 @@ class SearchResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     source: AnswerSource
     session_id: str | None = None
-    guardrail_reason: str | None = Field(default=None, description="Why GUARDRAIL blocked the answer (Part 3).")
+    guardrail_reason: str | None = Field(default=None, description="Why GUARDRAIL blocked the answer.")
+    eval: EvalResult | None = Field(default=None, description="EVAL's scores for a new LLM answer (not on cache hits).")
+    tools_used: list[str] = Field(default_factory=list, description="TOOLS / MCP tools the LLM called.")
 
 
 class CachedAnswer(BaseModel):

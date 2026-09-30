@@ -78,7 +78,7 @@ class PromptCache:
 
     def _llm_string(self, index_version: int) -> str:
         s = self.settings
-        return f"{s.llm_provider}:{s.llm_model}|corpus-v{index_version}"
+        return f"{s.groq_model}+{s.gemini_model}|corpus-v{index_version}"
 
 
 def prompt_text(question: str, chunk_ids: list[str]) -> str:

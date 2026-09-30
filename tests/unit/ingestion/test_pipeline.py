@@ -80,3 +80,19 @@ def test_missing_path_raises(pipeline, tmp_path):
 
     with pytest.raises(FileNotFoundError):
         pipe.ingest_path(tmp_path / "nope")
+
+
+def test_eval_results_are_never_ingested(fake_models, tmp_path):
+    """ "all the eval results are stored separately": an LLM answer must not come back as evidence."""
+    results = tmp_path / "data" / "eval_results"
+    results.mkdir(parents=True)
+    (results / "2026-09-30.jsonl").write_text('{"question": "q", "answer": "East made 143 [1]."}\n')
+    (results / "export.json").write_text('[{"answer": "East made 143 [1]."}]')  # a supported type, still skipped
+    (tmp_path / "data" / "notes.txt").write_text("Goroutines are lightweight threads.")
+    store = _RecordingStore()
+    pipeline = IngestionPipeline(Settings(eval_results_dir=str(results)), store=store)
+
+    report = pipeline.ingest_path(tmp_path / "data")
+
+    assert report.files == 1 and len(report.skipped) == 2
+    assert all("143" not in chunk.text for chunks in store.writes for chunk in chunks)

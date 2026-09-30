@@ -70,7 +70,7 @@ One installable package, `src/search_engine/`. Each folder is a diagram region a
 | `infra/` | Clients built once: `elasticsearch.py`, `redis.py`, `llm_client.py`, `models.py` (bge, CLIP, Whisper, cross-encoder) |
 | `ingestion/` | **Ingestion pipeline**: `sources/`, `chunking.py`, `text_embed.py`, `image_embed.py`, `enrichment.py`, `vector_store.py`, `pipeline.py` |
 | `retrieval/` | **Retrieval pipeline**: `query_enhance.py`, `filters.py`, `hybrid_search.py`, `rerank.py`, `semantic_cache.py`, `prompt_cache.py`, `session.py`, `pipeline.py` |
-| `llm/` | **LLM Architecture**: `agent.py`, `mcp.py`, `tools/`, `guardrail.py`, `eval.py`, `eval_store.py`, `pipeline.py` |
+| `llm/` | **LLM Architecture**: `agent.py`, `context.py`, `mcp.py`, `tools/`, `guardrail.py`, `eval.py`, `eval_store.py`, `pipeline.py` |
 | `api/` | FastAPI app, the USER entry point (`app.py`, `deps.py`, `routes/`) |
 | `cli.py` | `search-engine` command: `ingest`, `search` |
 | `tests/unit/` | Mirrors `src/`, no Docker needed; `-m slow` runs the real models |
@@ -230,29 +230,55 @@ asking the same or a similar question again is answered from the FAISS or Redis 
 
 ---
 
-## Part 3: LLM Architecture (end to end)
+## Part 3: LLM Architecture (end to end) ✅
 
 Diagram boxes: *LLM, MCP, TOOLS, GUARDRAIL (SAFE / UNSAFE, "sends the reason alongside"), EVAL, RESULT,
 "goes for caching", FINAL RESULT to USER, "all the eval results are stored separately".*
 
-1. `llm/agent.py`: the **LLM** as an agent that can call:
-   - `llm/mcp.py`: **MCP** client (connects to MCP servers)
-   - `llm/tools/`: **TOOLS** (local function tools, one file per tool)
-2. `llm/guardrail.py`: **GUARDRAIL** on the LLM output:
-   - **UNSAFE** → back to the USER with the reason
+**Two LLM providers are used together** (`infra/llm_client.py`; `.env`: `GROQ_API_KEY`, `GROQ_MODEL`,
+`GROQ_FAST_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`), so neither free rate limit is reached quickly. Each role
+prefers one provider and falls back to the other on an error, rate limit or unusable output:
+
+| Role | Used by | First choice | Falls back to |
+|---|---|---|---|
+| fast | Query Enhancement | Groq `openai/gpt-oss-20b` | Gemini |
+| answer | the LLM (agent) | Groq `openai/gpt-oss-120b` | Gemini |
+| guard | Guardrail | Groq `openai/gpt-oss-safeguard-20b` | Gemini |
+| judge | Eval | Gemini `gemini-2.5-flash` | Groq `openai/gpt-oss-20b` |
+
+1. `llm/agent.py`: the **LLM** as an agent (LangChain `create_agent`, on LangGraph): answers from the numbered
+   passages and cites [n]; can call tools up to `agent_max_tool_calls` (4); if the agent run fails, one direct LLM
+   call answers from the passages in hand ✅
+   - `llm/tools/`: **TOOLS**, one file per tool: `search_documents` (hybrid search + rerank again),
+     `read_surrounding` (the chunks before and after a passage), `list_files`, `calculator` (parsed, never
+     executed). Passages a tool finds continue the numbering (`llm/context.py`), so they can be cited ✅
+   - `llm/mcp.py`: **MCP** client (`langchain-mcp-adapters` `MultiServerMCPClient`): tools of the servers in
+     `MCP_SERVERS` (.env; none by default) are offered to the agent as `<server>_<tool>`; a server that can't be
+     reached is skipped ✅
+2. `llm/guardrail.py`: **GUARDRAIL** on the LLM output: rules for credentials (no LLM call), then a safety model
+   judging the answer against a written policy (harmful, secrets, sensitive personal data, prompt injection) ✅
+   - **UNSAFE** → back to the USER with the reason (`guardrail_reason`, source `guardrail_blocked`); not cached,
+     EVAL skipped
    - **SAFE** → EVAL
-3. `llm/eval.py`: **EVAL** (LLM-as-judge: faithfulness to the context, relevance, citation correctness), as JSON.
-4. `llm/pipeline.py`: builds the **RESULT**, which:
-   - **goes for caching**: written to the FAISS Semantic Cache (only results that passed GUARDRAIL + EVAL)
-   - is returned as the **FINAL RESULT to USER**
-5. `llm/eval_store.py`: **"all the eval results are stored separately"**: every eval result is saved as a JSON
-   record in its own store (`data/eval_results/`), for monitoring answer quality and tuning retrieval. It is
-   **never** ingested into the Vector Database, so LLM answers can't come back as evidence.
-6. Swap the direct LLM call from Part 2 for this pipeline behind the same function.
+   - safety model unreachable → the answer passes on the rules only and is never cached
+3. `llm/eval.py`: **EVAL** (LLM-as-judge, JSON-schema output): faithfulness, relevance, citation correctness,
+   1–5, judged against the passages and the tool results; passes when every score ≥ `eval_pass_score` (4). The
+   user gets the answer with its scores either way ✅
+4. `llm/pipeline.py`: `LLMPipeline.run()` builds the **RESULT** (LLM → GUARDRAIL → EVAL), which ✅
+   - **goes for caching**: written to the FAISS Semantic Cache and the Redis Prompt Cache only when it passed
+     GUARDRAIL + EVAL (and cites something)
+   - is returned as the **FINAL RESULT to USER** (answer, citations, eval scores, tools used)
+5. `llm/eval_store.py`: **"all the eval results are stored separately"**: one JSON line per LLM answer in
+   `data/eval_results/<date>.jsonl` (question, answer, passages, tools, guardrail verdict, eval scores). It is
+   **never** ingested: Ingestion skips that folder, so LLM answers can't come back as evidence ✅
+6. `retrieval/pipeline.py` calls `LLMPipeline.run()` in place of Part 2's direct LLM call ✅
+
+LLM calls per new question: Query Enhancement + agent (1 + one per tool call) + guardrail + eval = 4 or more,
+split over the two providers. A cache hit: 1.
 
 **Done when:** every answer passes through LLM (with MCP/TOOLS) → GUARDRAIL → EVAL → RESULT; unsafe answers come
 back with a reason; safe results are cached; and every eval result is stored separately (and does not appear in
-search results).
+search results). ✅ (`tests/e2e/test_llm_done_when.py`; real run on Groq + Gemini through the full pipeline)
 
 ---
 

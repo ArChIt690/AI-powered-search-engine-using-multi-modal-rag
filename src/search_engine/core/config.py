@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,14 +48,23 @@ class Settings(BaseSettings):
     semantic_breakpoint_percentile: float = 90.0  # higher = fewer, larger semantic chunks
     semantic_min_chunk_size: int = 200  # characters; avoids tiny one-sentence semantic chunks
 
-    # LLM: free APIs through LangChain `init_chat_model`; switch provider in .env, no code change
-    llm_provider: Literal["groq", "google_genai"] = "groq"
-    llm_model: str = "openai/gpt-oss-120b"  # google_genai: gemini-2.5-flash
-    llm_fast_model: str | None = "openai/gpt-oss-20b"  # Query Enhancement; None = llm_model
-    llm_api_key: SecretStr | None = None
+    # LLMs: two free providers used together, each falling back to the other (see infra/llm_client.py)
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "openai/gpt-oss-120b"  # the answering LLM
+    groq_fast_model: str = "openai/gpt-oss-20b"  # Query Enhancement, Guardrail; Eval's fallback
+    gemini_api_key: SecretStr | None = None
+    groq_guard_model: str = "openai/gpt-oss-safeguard-20b"  # Guardrail: judges content against a written policy
+    gemini_model: str = "gemini-2.5-flash"  # Eval; the fallback for everything else
     llm_temperature: float = 0.0
     llm_timeout_s: float = 30.0
-    llm_max_retries: int = 2
+    llm_max_retries: int = 1  # then the other provider is tried
+
+    # LLM Architecture
+    agent_max_tool_calls: int = 4  # per question, then the LLM must answer with what it has
+    agent_tool_top_k: int = 5  # passages one `search_documents` call adds
+    mcp_servers: dict[str, dict[str, Any]] = {}  # MCP_SERVERS='{"name": {"transport": "stdio", "command": ..., "args": [...]}}'
+    eval_pass_score: int = 4  # every Eval score (1-5) must reach this for the answer to be cached
+    eval_results_dir: str = "data/eval_results"  # stored separately; never ingested
 
     # Retrieval
     top_k: int = 10  # reranked chunks given to the LLM

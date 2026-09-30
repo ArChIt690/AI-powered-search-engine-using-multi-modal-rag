@@ -103,6 +103,19 @@ def test_cli_prints_answer_citations_and_source():
     assert "[1] report.pdf, page 3 (table): '|North|120|'" in text and "answered by: llm" in text
 
 
+def test_cli_prints_tools_and_eval_scores():
+    from search_engine.schemas.eval import EvalResult
+
+    result = response(SearchRequest(query="who leads"))
+    result.tools_used = ["calculator", "search_documents"]
+    result.eval = EvalResult(faithfulness=5, relevance=4, citation_correctness=2, passed=False, notes="[1] is wrong.")
+
+    text = cli.format_response(result)
+
+    assert "tools used: calculator, search_documents" in text
+    assert "eval: faithfulness 5/5, relevance 4/5, citations 2/5 (not passed, so not cached) - [1] is wrong." in text
+
+
 def test_cli_exits_with_the_reason_when_the_llm_is_down(monkeypatch):
     import search_engine.retrieval.pipeline as pipeline_module
 

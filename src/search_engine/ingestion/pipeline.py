@@ -53,7 +53,12 @@ class IngestionPipeline:
     def ingest_path(self, path: Path) -> IngestReport:
         """One file, or every file under a folder. One bad file is recorded and doesn't stop the rest."""
         report = IngestReport()
+        # "all the eval results are stored separately": LLM answers must never be ingested as evidence.
+        eval_results = Path(self.settings.eval_results_dir).resolve()
         for file in _files(path):
+            if file.resolve().is_relative_to(eval_results):
+                report.skipped.append(str(file))
+                continue
             if file.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 report.skipped.append(str(file))
                 continue

@@ -69,6 +69,15 @@ def format_response(response) -> str:
             where += f", at {int(c.timestamp) // 60:02d}:{int(c.timestamp) % 60:02d}"
         lines.append(f"[{c.number}] {c.file_name}{where} ({c.content}): {c.snippet[:100]!r}")
     lines.append(f"answered by: {response.source.value}")
+    if response.tools_used:
+        lines.append(f"tools used: {', '.join(response.tools_used)}")
+    if response.eval:
+        e = response.eval
+        verdict = "passed" if e.passed else "not passed, so not cached"
+        lines.append(
+            f"eval: faithfulness {e.faithfulness}/5, relevance {e.relevance}/5, citations {e.citation_correctness}/5"
+            f" ({verdict})" + (f" - {e.notes}" if e.notes else "")
+        )
     return "\n".join(lines)
 
 

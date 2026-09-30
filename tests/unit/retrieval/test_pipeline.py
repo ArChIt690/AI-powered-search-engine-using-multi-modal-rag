@@ -7,6 +7,8 @@ from search_engine.core.config import Settings
 from search_engine.core.exceptions import LLMUnavailableError
 from search_engine.retrieval import pipeline as pipeline_module
 from search_engine.retrieval.pipeline import NO_RESULTS_ANSWER, SearchPipeline
+from search_engine.llm.pipeline import LLMResult
+from search_engine.schemas.eval import EvalResult, GuardrailVerdict
 from search_engine.schemas.query import EnhancedQuery, SearchFilters, SearchRequest
 from search_engine.schemas.response import AnswerSource, CachedAnswer
 
@@ -61,30 +63,35 @@ class FakeSessions(Recorder):
         self.calls.append(("append", session_id, question, answer))
 
 
-class FakeAgent(Recorder):
-    def __init__(self, calls, answer="Goroutines are light [1], see the chart [2].", error=None):
-        super().__init__(calls)
-        self.text, self.error = answer, error
+class FakeLLM(Recorder):
+    """Stands in for the LLM Architecture (llm/pipeline.py): returns a RESULT with the given verdicts."""
 
-    def answer(self, question, chunks, history):
+    def __init__(self, calls, answer="Goroutines are light [1], see the chart [2].", error=None,
+                 guardrail=GuardrailVerdict(safe=True), eval_passed=True, extra_chunks=()):
+        super().__init__(calls)
+        self.text, self.error, self.guardrail, self.eval_passed = answer, error, guardrail, eval_passed
+        self.extra_chunks = list(extra_chunks)
+
+    def run(self, question, chunks, history, filters):
         self.calls.append(("llm", question, len(chunks), len(history)))
         if self.error:
             raise self.error
-        return self.text
+        scores = None
+        if self.guardrail.safe and self.eval_passed is not None:
+            scores = EvalResult(faithfulness=5, relevance=5, citation_correctness=5, passed=self.eval_passed)
+        return LLMResult(self.text, [*chunks, *self.extra_chunks], self.guardrail, scores, ["calculator"])
 
 
-def build(monkeypatch, *, chunks=CHUNKS, faiss_hit=None, redis_hit=None, agent_answer=None, agent_error=None,
-          version=7):
+def build(monkeypatch, *, chunks=CHUNKS, faiss_hit=None, redis_hit=None, version=7, **llm):
     calls = []
     faiss, redis = FakeCache(calls, "faiss", faiss_hit), FakeCache(calls, "redis", redis_hit)
-    agent = FakeAgent(calls, **({"answer": agent_answer} if agent_answer else {}), error=agent_error)
     if isinstance(version, Exception):
         monkeypatch.setattr(pipeline_module, "index_version", lambda settings: (_ for _ in ()).throw(version))
     else:
         monkeypatch.setattr(pipeline_module, "index_version", lambda settings: version)
     pipeline = SearchPipeline(
         Settings(), enhancer=FakeEnhancer(calls), reranker=FakeReranker(calls, chunks), semantic_cache=faiss,
-        prompt_cache=redis, sessions=FakeSessions(calls), agent=agent,
+        prompt_cache=redis, sessions=FakeSessions(calls), llm=FakeLLM(calls, **llm),
     )
     return pipeline, calls, faiss, redis
 
@@ -110,6 +117,7 @@ def test_a_miss_runs_every_box_in_the_diagrams_order_and_caches_the_answer(monke
     assert redis.stored[0][:3] == ("goroutines? (rewritten)", ["d-0", "d-9"], 7)
     assert faiss.stored[0][:3] == ("goroutines? (rewritten)", SearchFilters(file_type=["md"], content=["text"]), 7)
     assert calls[-1] == ("append", "s1", "goroutines?", response.answer)
+    assert response.eval.passed and response.tools_used == ["calculator"] and response.guardrail_reason is None
 
 
 def test_a_faiss_hit_skips_redis_and_the_llm(monkeypatch):
@@ -141,7 +149,7 @@ def test_no_chunks_means_no_llm_call_and_nothing_cached(monkeypatch):
 
 
 def test_an_answer_without_citations_is_not_cached(monkeypatch):
-    pipeline, _, faiss, redis = build(monkeypatch, agent_answer="The documents don't cover this.")
+    pipeline, _, faiss, redis = build(monkeypatch, answer="The documents don't cover this.")
 
     response = pipeline.search(SearchRequest(query="q"))
 
@@ -158,9 +166,43 @@ def test_without_the_index_version_the_caches_are_skipped(monkeypatch):
 
 
 def test_an_llm_failure_is_raised_and_not_saved_to_the_session(monkeypatch):
-    pipeline, calls, faiss, _ = build(monkeypatch, agent_error=LLMUnavailableError("429"))
+    pipeline, calls, faiss, _ = build(monkeypatch, error=LLMUnavailableError("429"))
 
     with pytest.raises(LLMUnavailableError):
         pipeline.search(SearchRequest(query="q", session_id="s1"))
 
     assert "append" not in names(calls) and faiss.stored == []
+
+
+def test_an_unsafe_answer_is_replaced_by_the_reason_and_never_cached(monkeypatch):
+    unsafe = GuardrailVerdict(safe=False, category="secrets", reason="The answer contained an API key.")
+    pipeline, calls, faiss, redis = build(monkeypatch, guardrail=unsafe, answer="The key is gsk_secret [1].")
+
+    response = pipeline.search(SearchRequest(query="what is the key?", session_id="s1"))
+
+    assert response.source == AnswerSource.GUARDRAIL_BLOCKED
+    assert response.guardrail_reason == "The answer contained an API key."
+    assert "gsk_secret" not in response.answer and "The answer contained an API key." in response.answer
+    assert response.citations == [] and response.eval is None
+    assert faiss.stored == redis.stored == []
+    assert "gsk_secret" not in calls[-1][3]  # the session keeps the refusal, not the unsafe text
+
+
+@pytest.mark.parametrize("eval_passed", [False, None])  # failed EVAL, or the judge could not run
+def test_an_answer_that_did_not_pass_eval_is_returned_but_not_cached(monkeypatch, eval_passed):
+    pipeline, _, faiss, redis = build(monkeypatch, eval_passed=eval_passed)
+
+    response = pipeline.search(SearchRequest(query="q"))
+
+    assert response.source == AnswerSource.LLM and len(response.citations) == 2
+    assert faiss.stored == redis.stored == []
+
+
+def test_passages_a_tool_added_can_be_cited(monkeypatch):
+    found = Document("South had 95.", metadata={"chunk_id": "d-7", "file_name": "go.md", "modality": "text",
+                                                 "content": "text", "source": "/go.md"})
+    pipeline, _, _, _ = build(monkeypatch, answer="South had 95 [3].", extra_chunks=[found])
+
+    response = pipeline.search(SearchRequest(query="q"))
+
+    assert [(c.number, c.chunk_id) for c in response.citations] == [(3, "d-7")]

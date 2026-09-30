@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from search_engine.core.config import Settings, get_settings
-from search_engine.infra.llm_client import get_chat_model
+from search_engine.infra.llm_client import get_structured_model
 from search_engine.schemas.query import EnhancedQuery
 
 logger = logging.getLogger(__name__)
@@ -30,9 +30,11 @@ _MAX_HISTORY_CHARS = 500  # per message; enough to resolve references, and keeps
 class QueryEnhancer:
     def __init__(self, settings: Settings | None = None, *, llm: BaseChatModel | None = None):
         self.settings = settings or get_settings()
-        # json_schema: the model fills the schema directly. With tool calling, gpt-oss (Groq) sometimes names the
-        # tool "functions.EnhancedQuery" and LangChain rejects the reply (2 of 6 real questions failed that way).
-        structured = (llm or get_chat_model(fast=True)).with_structured_output(EnhancedQuery, method="json_schema")
+        structured = (
+            llm.with_structured_output(EnhancedQuery, method="json_schema")
+            if llm
+            else get_structured_model(EnhancedQuery, "fast")
+        )
         self.chain = _PROMPT | structured
 
     def enhance(self, query: str, history: Sequence[BaseMessage] = ()) -> EnhancedQuery:

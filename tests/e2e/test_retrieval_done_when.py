@@ -16,10 +16,11 @@ from search_engine.core.config import Settings
 from search_engine.infra import models
 from search_engine.infra.redis import get_redis
 from search_engine.ingestion.pipeline import IngestionPipeline
-from search_engine.llm.agent import LLMAgent
+from search_engine.llm.pipeline import LLMResult
 from search_engine.retrieval.pipeline import SearchPipeline
 from search_engine.retrieval.prompt_cache import PromptCache
 from search_engine.retrieval.query_enhance import QueryEnhancer
+from search_engine.schemas.eval import EvalResult, GuardrailVerdict
 from search_engine.schemas.query import EnhancedQuery, SearchRequest
 from search_engine.schemas.response import AnswerSource
 from tests.e2e.test_ingestion_done_when import _es, _SpeechStandIn, corpus  # noqa: F401  (corpus is a fixture)
@@ -34,14 +35,17 @@ class _TypedQueryLLM:
         return RunnableLambda(lambda prompt: EnhancedQuery(query=prompt.to_string().rsplit("Latest question: ", 1)[1]))
 
 
-class _CountingAgent(LLMAgent):
+class _CountingLLM:
+    """Stands in for the LLM Architecture: counts its calls and cites every passage it gets (safe, eval passed)."""
+
     def __init__(self):
-        super().__init__()
         self.calls = 0
 
-    def answer(self, question, chunks, history=()):
+    def run(self, question, chunks, history=(), filters=None):
         self.calls += 1
-        return "From the documents: " + " ".join(f"[{n}]" for n in range(1, len(chunks) + 1))
+        answer = "From the documents: " + " ".join(f"[{n}]" for n in range(1, len(chunks) + 1))
+        scores = EvalResult(faithfulness=5, relevance=5, citation_correctness=5, passed=True)
+        return LLMResult(answer, list(chunks), GuardrailVerdict(safe=True), scores)
 
 
 @pytest.fixture
@@ -56,10 +60,10 @@ def setup(corpus, tmp_path, monkeypatch):
     )
     ingestion = IngestionPipeline(settings)
     ingestion.ingest_path(corpus)
-    agent = _CountingAgent()
+    agent = _CountingLLM()
     prompt_cache = PromptCache(settings, embedder=ingestion.text_embedder, namespace=f"e2e{suffix}")
     pipeline = SearchPipeline(
-        settings, enhancer=QueryEnhancer(settings, llm=_TypedQueryLLM()), prompt_cache=prompt_cache, agent=agent
+        settings, enhancer=QueryEnhancer(settings, llm=_TypedQueryLLM()), prompt_cache=prompt_cache, llm=agent
     )
     yield pipeline, agent, ingestion, corpus
     _es().indices.delete(index=f"{settings.es_text_index},{settings.es_image_index}", ignore_unavailable=True)
