@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     eval_pass_score: int = 4  # every Eval score (1-5) must reach this for the answer to be cached
     eval_results_dir: str = "data/eval_results"  # stored separately; never ingested
 
+    # API
+    landing_dir: str = "data/landing"  # where uploaded files are kept; their path is the citation source
+
     # Retrieval
     top_k: int = 10  # reranked chunks given to the LLM
     retrieval_candidates: int = 30  # hits per list (text hybrid, image kNN) fetched for Reranking

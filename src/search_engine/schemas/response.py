@@ -49,3 +49,20 @@ class CachedAnswer(BaseModel):
 
     answer: str
     citations: list[Citation] = Field(default_factory=list)
+
+
+class IngestResponse(BaseModel):
+    """What `POST /ingest` reports about the uploaded files."""
+
+    files: int = Field(description="Files ingested.")
+    chunks: int = Field(description="Chunks written to the Vector Database.")
+    skipped: list[str] = Field(default_factory=list, description="File names of unsupported types.")
+    failed: dict[str, str] = Field(default_factory=dict, description="File name -> why it could not be ingested.")
+
+
+class FileInfo(BaseModel):
+    """One ingested file, as listed by `GET /files`."""
+
+    file_name: str
+    passages: int = 0
+    pictures: int = 0

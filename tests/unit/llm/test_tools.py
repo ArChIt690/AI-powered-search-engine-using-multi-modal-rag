@@ -104,19 +104,24 @@ def test_read_surrounding_of_the_first_chunk_only_asks_for_the_next(monkeypatch)
 
 
 def test_list_files_counts_passages_and_pictures_per_file(monkeypatch):
-    buckets = {
-        "t": [{"key": "report.pdf", "doc_count": 12}, {"key": "notes.md", "doc_count": 3}],
-        "i": [{"key": "report.pdf", "doc_count": 2}],
+    counts = {
+        "notes.md": {"passages": 3, "pictures": 0},
+        "photo.png": {"passages": 0, "pictures": 1},
+        "report.pdf": {"passages": 12, "pictures": 2},
     }
-    search = lambda index, **kwargs: {"aggregations": {"files": {"buckets": buckets[index]}}}  # noqa: E731
-    monkeypatch.setattr(list_files, "get_es_client", lambda: SimpleNamespace(search=search))
+    monkeypatch.setattr(list_files, "file_counts", lambda settings: counts)
 
     reply = tool("list_files", context()).invoke({})
 
-    assert reply == "2 files:\n- notes.md: 3 text passages\n- report.pdf: 12 text passages, 2 pictures"
+    assert reply.splitlines() == [
+        "3 files:",
+        "- notes.md: 3 text passages",
+        "- photo.png: 1 pictures",
+        "- report.pdf: 12 text passages, 2 pictures",
+    ]
 
 
 def test_list_files_with_an_empty_corpus(monkeypatch):
-    monkeypatch.setattr(list_files, "get_es_client", lambda: SimpleNamespace(search=lambda index, **kwargs: {}))
+    monkeypatch.setattr(list_files, "file_counts", lambda settings: {})
 
     assert tool("list_files", context()).invoke({}) == "No files have been ingested."

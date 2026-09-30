@@ -106,6 +106,22 @@ class VectorStore:
             logger.warning("Could not bump %s in Redis; cached answers expire by TTL only", self.settings.index_version_key)
 
 
+def file_counts(settings: Settings | None = None, max_files: int = 500) -> dict[str, dict[str, int]]:
+    """The ingested files and what each holds: {file name: {"passages": n, "pictures": n}}, sorted by name."""
+    settings = settings or get_settings()
+    counts: dict[str, dict[str, int]] = {}
+    for index, kind in ((settings.es_text_index, "passages"), (settings.es_image_index, "pictures")):
+        reply = get_es_client().search(
+            index=index,
+            size=0,
+            ignore_unavailable=True,  # nothing ingested yet
+            aggs={"files": {"terms": {"field": "metadata.file_name.keyword", "size": max_files}}},
+        )
+        for bucket in reply.get("aggregations", {}).get("files", {}).get("buckets", []):
+            counts.setdefault(bucket["key"], {"passages": 0, "pictures": 0})[kind] = bucket["doc_count"]
+    return dict(sorted(counts.items()))
+
+
 def build_text_store(
     settings: Settings, text_embedder: TextEmbedder | None = None, strategy: DenseVectorStrategy | None = None
 ) -> ElasticsearchStore:

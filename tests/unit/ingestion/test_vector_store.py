@@ -128,3 +128,32 @@ def test_real_stores_use_langchain_with_the_right_fields(monkeypatch):
     assert store.text_store.vector_query_field == "text_embedding"
     assert store.image_store.vector_query_field == "image_embedding"
     assert store.text_store.query_field == store.image_store.query_field == "text"
+
+
+def test_file_counts_merges_both_indexes_and_sorts_by_name(monkeypatch):
+    buckets = {
+        "t": [{"key": "report.pdf", "doc_count": 12}, {"key": "notes.md", "doc_count": 3}],
+        "i": [{"key": "report.pdf", "doc_count": 2}, {"key": "photo.png", "doc_count": 1}],
+    }
+
+    class Client:
+        def search(self, index, **kwargs):
+            assert kwargs["size"] == 0 and kwargs["ignore_unavailable"] is True
+            return {"aggregations": {"files": {"buckets": buckets[index]}}}
+
+    monkeypatch.setattr(vector_store, "get_es_client", lambda: Client())
+
+    counts = vector_store.file_counts(Settings(es_text_index="t", es_image_index="i"))
+
+    assert counts == {
+        "notes.md": {"passages": 3, "pictures": 0},
+        "photo.png": {"passages": 0, "pictures": 1},
+        "report.pdf": {"passages": 12, "pictures": 2},
+    }
+    assert list(counts) == ["notes.md", "photo.png", "report.pdf"]
+
+
+def test_file_counts_with_nothing_ingested(monkeypatch):
+    monkeypatch.setattr(vector_store, "get_es_client", lambda: type("C", (), {"search": lambda self, index, **k: {}})())
+
+    assert vector_store.file_counts(Settings()) == {}

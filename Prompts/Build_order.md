@@ -71,13 +71,14 @@ One installable package, `src/search_engine/`. Each folder is a diagram region a
 | `ingestion/` | **Ingestion pipeline**: `sources/`, `chunking.py`, `text_embed.py`, `image_embed.py`, `enrichment.py`, `vector_store.py`, `pipeline.py` |
 | `retrieval/` | **Retrieval pipeline**: `query_enhance.py`, `filters.py`, `hybrid_search.py`, `rerank.py`, `semantic_cache.py`, `prompt_cache.py`, `session.py`, `pipeline.py` |
 | `llm/` | **LLM Architecture**: `agent.py`, `context.py`, `mcp.py`, `tools/`, `guardrail.py`, `eval.py`, `eval_store.py`, `pipeline.py` |
-| `api/` | FastAPI app, the USER entry point (`app.py`, `deps.py`, `routes/`) |
+| `api/` | FastAPI app, the USER entry point (`app.py`, `deps.py`, `routes/search.py`, `routes/ingest.py`) |
+| `frontend/` | Streamlit page for the USER (`app.py`, `api_client.py`); talks to the API only |
 | `cli.py` | `search-engine` command: `ingest`, `search` |
 | `tests/unit/` | Mirrors `src/`, no Docker needed; `-m slow` runs the real models |
 | `tests/integration/` | Real Elasticsearch + Redis from `docker-compose.yml` (skipped when not running) |
 | `tests/e2e/` | File in → answer out; one test per part's "Done when" |
 | `eval/` | Dev-only retrieval benchmark (`corpus/`, `questions.jsonl`, `run.py`: recall@k, MRR). Not the EVAL box. |
-| `data/` | Git-ignored runtime data: `faiss_cache/` (FAISS Semantic Cache), `eval_results/` |
+| `data/` | Git-ignored runtime data: `landing/` (uploaded files), `faiss_cache/` (FAISS Semantic Cache), `eval_results/` |
 | `docs/` | `Search_Engine_Architecture.drawio` |
 | `Prompts/` | This file and the approved plans (`Prompts/plans/`) |
 
@@ -279,6 +280,27 @@ split over the two providers. A cache hit: 1.
 **Done when:** every answer passes through LLM (with MCP/TOOLS) → GUARDRAIL → EVAL → RESULT; unsafe answers come
 back with a reason; safe results are cached; and every eval result is stored separately (and does not appear in
 search results). ✅ (`tests/e2e/test_llm_done_when.py`; real run on Groq + Gemini through the full pipeline)
+
+---
+
+## Frontend (the USER's screen) ✅
+
+Not a new diagram box: it is how the **USER** reaches the system, like the CLI. `frontend/` (Streamlit) talks only
+to the FastAPI API over HTTP and imports nothing from `search_engine`, so the models are loaded once, in the API.
+
+- `frontend/api_client.py`: `httpx` client for the API (`API_URL`, default `http://localhost:8000`): `search`,
+  `ingest`, `files`, `health`; failures become messages fit to show the user ✅
+- `frontend/app.py` (`uv run streamlit run frontend/app.py`): a chat (one session id per conversation, so
+  follow-ups work); each answer shows where it came from (LLM / FAISS cache / Redis cache / blocked / no results),
+  its sources (file, page or video time, snippet), the Eval scores, the tools used and the rewritten query; a
+  blocked answer shows the Guardrail's reason. Sidebar: status of the API, Elasticsearch and Redis; upload and
+  ingest files; the ingested files; filters and `top_k`; new conversation ✅
+- API additions for it, `api/routes/ingest.py`: `POST /ingest` (uploads are saved in `data/landing/` under their
+  bare file name and ingested; the same name replaces the old chunks) and `GET /files`
+  (`ingestion/vector_store.file_counts`, shared with the `list_files` tool) ✅
+- Checked for real: Docker services + API + Streamlit server running; 9 files uploaded through the page (79
+  chunks); questions answered with citations, eval scores and tools; a repeat served from the FAISS cache; a
+  follow-up rewritten from the session; a file-type filter applied; no page errors.
 
 ---
 

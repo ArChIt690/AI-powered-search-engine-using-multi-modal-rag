@@ -4,7 +4,10 @@ from fastapi.testclient import TestClient
 from search_engine import cli
 from search_engine.api import app as app_module
 from search_engine.api.routes import search as search_route
+from search_engine.api.routes import ingest as ingest_route
+from search_engine.core.config import Settings
 from search_engine.core.exceptions import LLMUnavailableError
+from search_engine.ingestion.pipeline import IngestReport
 from search_engine.schemas.query import SearchFilters, SearchRequest
 from search_engine.schemas.response import AnswerSource, Citation, SearchResponse
 
@@ -27,8 +30,27 @@ class FakePipeline:
         return response(request)
 
 
-def client(pipeline):
-    return TestClient(app_module.create_app(lambda: pipeline))
+class FakeIngestion:
+    """Stands in for the IngestionPipeline: "ingests" .txt/.md files, skips other types, fails on bad.txt."""
+
+    def __init__(self, landing):
+        self.settings = Settings(landing_dir=str(landing))
+        self.seen = []
+
+    def ingest_path(self, path):
+        self.seen.append((path, path.read_bytes()))
+        report = IngestReport()
+        if path.name == "bad.txt":
+            report.failed[str(path)] = "ValueError: not readable"
+        elif path.suffix not in {".txt", ".md"}:
+            report.skipped.append(str(path))
+        else:
+            report.files, report.chunks = 1, 3
+        return report
+
+
+def client(pipeline, ingestion=None):
+    return TestClient(app_module.create_app(lambda: pipeline, lambda: ingestion))
 
 
 def test_post_search_returns_the_cited_answer():
@@ -68,6 +90,56 @@ def test_health_reports_each_service(monkeypatch):
     monkeypatch.setattr(search_route, "get_redis", lambda: Down())
     with client(FakePipeline()) as c:
         assert c.get("/health").json() == {"elasticsearch": True, "redis": False}
+
+
+def test_uploads_are_saved_in_the_landing_folder_and_ingested(tmp_path):
+    ingestion = FakeIngestion(tmp_path / "landing")
+    with client(FakePipeline(), ingestion) as c:
+        reply = c.post("/ingest", files=[("files", ("notes.md", b"# Go")), ("files", ("more.txt", b"text"))])
+
+    assert reply.status_code == 200
+    assert reply.json() == {"files": 2, "chunks": 6, "skipped": [], "failed": {}}
+    assert [(path.name, content) for path, content in ingestion.seen] == [("notes.md", b"# Go"), ("more.txt", b"text")]
+    assert (tmp_path / "landing" / "notes.md").read_bytes() == b"# Go"  # kept: its path is the citation source
+
+
+def test_unsupported_and_failed_uploads_are_reported_by_name_and_not_kept(tmp_path):
+    ingestion = FakeIngestion(tmp_path / "landing")
+    with client(FakePipeline(), ingestion) as c:
+        reply = c.post("/ingest", files=[("files", ("app.exe", b"MZ")), ("files", ("bad.txt", b"x")),
+                                         ("files", ("ok.txt", b"fine"))])
+
+    assert reply.json() == {"files": 1, "chunks": 3, "skipped": ["app.exe"], "failed": {"bad.txt": "ValueError: not readable"}}
+    assert sorted(p.name for p in (tmp_path / "landing").iterdir()) == ["ok.txt"]
+
+
+def test_an_upload_cannot_write_outside_the_landing_folder(tmp_path):
+    ingestion = FakeIngestion(tmp_path / "landing")
+    with client(FakePipeline(), ingestion) as c:
+        reply = c.post("/ingest", files=[("files", ("../../escaped.txt", b"x"))])
+        hidden = c.post("/ingest", files=[("files", (".env", b"SECRET=1"))])
+
+    assert reply.status_code == 200 and ingestion.seen[0][0] == tmp_path / "landing" / "escaped.txt"
+    assert not (tmp_path / "escaped.txt").exists() and not (tmp_path.parent / "escaped.txt").exists()
+    assert hidden.status_code == 400 and "Not a usable file name" in hidden.json()["detail"]
+
+
+def test_files_lists_what_is_ingested(tmp_path, monkeypatch):
+    counts = {"notes.md": {"passages": 5, "pictures": 0}, "report.pdf": {"passages": 3, "pictures": 1}}
+    monkeypatch.setattr(ingest_route, "file_counts", lambda settings: counts)
+    with client(FakePipeline(), FakeIngestion(tmp_path)) as c:
+        assert c.get("/files").json() == [
+            {"file_name": "notes.md", "passages": 5, "pictures": 0},
+            {"file_name": "report.pdf", "passages": 3, "pictures": 1},
+        ]
+
+    def down(settings):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(ingest_route, "file_counts", down)
+    with client(FakePipeline(), FakeIngestion(tmp_path)) as c:
+        reply = c.get("/files")
+    assert reply.status_code == 503 and "Elasticsearch is not available" in reply.json()["detail"]
 
 
 def test_cli_options_become_the_search_request():
