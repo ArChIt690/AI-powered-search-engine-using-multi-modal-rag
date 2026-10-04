@@ -1,3 +1,11 @@
+# The whole project:  docker compose up -d --build   ->   http://localhost:8501
+# Only the databases (to run the API and frontend with uv instead):  docker compose up -d elasticsearch redis
+#
+#   frontend (:8501) -> api (:8000) -> elasticsearch (:9200), redis (:6379), Groq / Gemini
+
+# Fixed project name, so the volumes (indexes, caches, models) keep their names even if the folder is renamed
+name: aipoweredsearchengineusingmultimodalrag
+
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
@@ -5,11 +13,12 @@ services:
     environment:
       - discovery.type=single-node          # one node, no cluster
       - xpack.security.enabled=false        # no auth/TLS for local dev
-      - ES_JAVA_OPTS=-Xms1g -Xmx1g          # cap memory at 1 GB
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g          # cap the Java heap at 1 GB
     ports:
       - "9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+    mem_limit: 2g                           # heap + off-heap; keeps one container from taking Docker down
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
       interval: 10s
@@ -18,15 +27,67 @@ services:
   redis:
     image: redis/redis-stack-server:7.4.0-v1  # Redis + vector search (for the prompt cache)
     container_name: search-redis
+    environment:
+      # Append-only file: every change is on disk within a second, so the index version, caches and sessions
+      # survive a restart or a Docker crash (the default snapshots only every 5-60 minutes)
+      - REDIS_ARGS=--appendonly yes --appendfsync everysec
+    stop_grace_period: 30s
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       retries: 6
 
+  api:
+    build: .
+    image: search-engine-api
+    container_name: search-api
+    env_file: .env                          # GROQ_* / GEMINI_* keys; never copied into the image
+    environment:
+      # inside Docker the databases are reached by service name, not localhost
+      - ES_URL=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data                    # uploaded files, FAISS cache, eval results: kept, and visible on disk
+      - model_cache:/models                 # bge, CLIP, cross encoder, Whisper: downloaded once, kept
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 3g                           # models + PyTorch; a video ingest (Whisper) needs the headroom
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 900s                    # the first start downloads the models (about 1.5 GB; ~8 min measured)
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    image: search-engine-frontend
+    container_name: search-frontend
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
 volumes:
   es_data:
   redis_data:
+  model_cache:

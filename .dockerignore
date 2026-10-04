@@ -1,4 +1,6 @@
-# Secrets (pass config via environment variables instead)
+# What the API image's build never needs (keeps the build context small and secrets out of images).
+
+# Secrets: the API container reads .env at start (env_file in docker-compose.yml); it is never copied in
 .env
 
 # Virtual environments and Python caches
@@ -17,10 +19,14 @@ dist/
 .idea/
 *.bkp
 
-# Runtime data (mounted as volumes, not baked into images)
+# Runtime data (mounted as a volume, not baked into the image)
 data/
-eval/
 
-# Not needed inside images
+# Not part of the API: the frontend has its own image; tests, docs, plans and the benchmark run on the host
+frontend/
 tests/
 docs/
+Prompts/
+eval/
+Dockerfile
+docker-compose.yml

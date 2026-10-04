@@ -29,7 +29,6 @@ dependencies = [
     "python-multipart>=0.0.32",
     "redis>=8.1.0",
     "sentence-transformers>=6.1.0",
-    "streamlit>=1.64.0",
     "torch>=2.14.0",
     "uvicorn>=0.53.0",
 ]
@@ -57,6 +56,7 @@ explicit = true
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "streamlit==1.64.0",
 ]
 
 [tool.pytest.ini_options]

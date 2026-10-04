@@ -78,6 +78,7 @@ One installable package, `src/search_engine/`. Each folder is a diagram region a
 | `tests/integration/` | Real Elasticsearch + Redis from `docker-compose.yml` (skipped when not running) |
 | `tests/e2e/` | File in → answer out; one test per part's "Done when" |
 | `eval/` | Dev-only retrieval benchmark (`corpus/`, `questions.jsonl`, `run.py`: recall@k, MRR). Not the EVAL box. |
+| `Dockerfile`, `docker-compose.yml` | The API image and the whole project's services (see Containers) |
 | `data/` | Git-ignored runtime data: `landing/` (uploaded files), `faiss_cache/` (FAISS Semantic Cache), `eval_results/` |
 | `docs/` | `Search_Engine_Architecture.drawio` |
 | `Prompts/` | This file and the approved plans (`Prompts/plans/`) |
@@ -301,6 +302,29 @@ to the FastAPI API over HTTP and imports nothing from `search_engine`, so the mo
 - Checked for real: Docker services + API + Streamlit server running; 9 files uploaded through the page (79
   chunks); questions answered with citations, eval scores and tools; a repeat served from the FAISS cache; a
   follow-up rewritten from the session; a file-type filter applied; no page errors.
+
+---
+
+## Containers
+
+`docker compose up -d --build` runs the whole project (`docker-compose.yml`); `docker compose up -d elasticsearch
+redis` runs only the databases, for development with `uv`.
+
+| Service | Image | Port | Notes |
+|---|---|---|---|
+| `elasticsearch` | elasticsearch 8.15.3 | 9200 | `es_data` volume, 1 GB heap, 2 GB limit |
+| `redis` | redis-stack-server 7.4.0 | 6379 | `redis_data` volume; append-only file on, so the index version, caches and sessions survive a restart or a crash |
+| `api` | `Dockerfile` (root) | 8000 | FastAPI + the three pipelines; `.env` read at start (`env_file`), never in the image; `./data` and the `model_cache` volume (models downloaded once) mounted; 3 GB limit |
+| `frontend` | `frontend/Dockerfile` | 8501 | Streamlit + httpx only; `API_URL=http://api:8000` |
+
+- API image: two stages. `uv sync --frozen --no-dev` with the uv cache as a build cache mount (the old Spark image
+  was 10 GB because that cache was baked in); dependencies installed before the source, so code changes rebuild in
+  seconds; CPU-only PyTorch on Linux (`[tool.uv.sources]`); runs as a non-root user.
+- Start order by health checks: databases → `api` (`/health`) → `frontend`.
+- Measured: API image 2.88 GB (PyTorch CPU alone is 769 MB; Streamlit moved to the dev group so it isn't in it),
+  frontend 791 MB; first start ~8 min (model downloads into `model_cache`, 795 MB), later starts ~70 s; 9 files
+  ingest in 7 s inside the container.
+- Fixed project name (`name:` in the compose file), so the volume names don't depend on the folder name.
 
 ---
 

@@ -18,25 +18,34 @@ Browser ─► Streamlit (frontend/) ─► FastAPI (src/search_engine/api/)
 
 ## Set up (once)
 
-1. Install [uv](https://docs.astral.sh/uv/) and Docker Desktop.
-2. `uv sync`
-3. Copy `.env.example` to `.env` and add your free API keys: `GROQ_API_KEY` (console.groq.com) and
+1. Install Docker Desktop.
+2. Copy `.env.example` to `.env` and add your free API keys: `GROQ_API_KEY` (console.groq.com) and
    `GEMINI_API_KEY` (aistudio.google.com). With only one key, that provider does everything.
 
 ## Run the project
 
-Use three terminals, in the project folder:
-
 ```
-docker compose up -d                              # 1. Elasticsearch and Redis
-uv run uvicorn search_engine.api.app:app          # 2. the API, on http://localhost:8000 (loads the models: ~1 minute)
-uv run streamlit run frontend/app.py              # 3. the frontend, on http://localhost:8501
+docker compose up -d --build
 ```
 
 Then open http://localhost:8501, add files in the sidebar, and ask a question.
 
-If the page says the API or the databases are not running, start them with the commands above. If Docker Desktop
-has stopped, open it and run `docker compose up -d` again. Your ingested files stay.
+- The first start takes a few minutes: the images are built and the API downloads its models (about 1.5 GB) into
+  a Docker volume. Later starts take about a minute.
+- `docker compose ps` shows whether all four services are healthy; `docker compose logs -f api` shows the API.
+- `docker compose down` stops everything. Your files, indexes, caches and models are kept (`./data` and Docker
+  volumes) and are there again on the next `up`.
+- If Docker Desktop has stopped, open it and run `docker compose up -d` again.
+
+### Without Docker for the app (for development)
+
+Install [uv](https://docs.astral.sh/uv/) and run `uv sync` once. Then, in three terminals:
+
+```
+docker compose up -d elasticsearch redis           # only the databases
+uv run uvicorn search_engine.api.app:app           # the API, on http://localhost:8000
+uv run streamlit run frontend/app.py               # the frontend, on http://localhost:8501
+```
 
 ## Without the frontend
 
