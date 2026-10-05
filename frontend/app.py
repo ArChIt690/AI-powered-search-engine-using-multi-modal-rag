@@ -1,7 +1,8 @@
-"""The USER's screen: ask questions about your files, add files, see what the search engine did.
+"""The USER's screen: ask questions about the documents and see where each answer came from.
 
-Run with `uv run streamlit run frontend/app.py` (the API must be running; see README). Everything goes through
-the API (`api_client.py`); this file only draws the page.
+Users only ask; adding documents is the admin's job (admin.py). Run with `uv run streamlit run frontend/app.py`
+(the API must be running; see README). Everything goes through the API (`api_client.py`); this file only draws
+the page.
 """
 
 import time
@@ -12,6 +13,7 @@ from typing import Any
 import streamlit as st
 
 from api_client import ApiClient, ApiError
+from shared import files_table, load_files, status_panel, viewer
 
 SOURCES = {
     "llm": "Answered by the LLM",
@@ -35,18 +37,17 @@ def main() -> None:
     state.setdefault("client", ApiClient())
     state.setdefault("session_id", uuid.uuid4().hex)
     state.setdefault("messages", [])
-    state.setdefault("upload_round", 0)
 
     options = sidebar(state.client)
 
     st.title("AI Search Engine")
-    st.caption("Ask questions about your own files: text, PDFs, tables, images and videos. Answers cite their sources.")
+    st.caption("Ask questions about the company's documents: text, PDFs, tables, images and videos. Answers cite their sources.")
     if not state.messages:
-        st.info("Add files in the sidebar, then ask a question below.")
+        st.info("Ask a question below. The documents you can search are listed in the sidebar.")
     for message in state.messages:
         show_message(message)
 
-    if question := st.chat_input("Ask a question about your files"):
+    if question := st.chat_input("Ask a question about the documents"):
         user_message = {"role": "user", "content": question}
         state.messages.append(user_message)
         show_message(user_message)
@@ -58,7 +59,7 @@ def main() -> None:
 def ask(client: ApiClient, question: str, session_id: str, options: dict[str, Any]) -> dict[str, Any]:
     """One question through the API; failures become a message in the chat, not a crash."""
     started = time.monotonic()
-    with st.spinner("Searching your files..."):
+    with st.spinner("Searching the documents..."):
         try:
             response = client.search(question, session_id, options["filters"], options["top_k"])
         except ApiError as error:
@@ -124,43 +125,14 @@ def citation_label(citation: dict[str, Any]) -> str:
 
 
 def sidebar(client: ApiClient) -> dict[str, Any]:
-    """Status, adding files, the file list and the search options. Returns {"filters", "top_k"}."""
+    """Who is signed in, status, the searchable documents and the search options. Returns {"filters", "top_k"}."""
     state = st.session_state
     with st.sidebar:
-        health = client.health()
-        st.subheader("Status")
-        for service, label in (("api", "Search API"), ("elasticsearch", "Elasticsearch"), ("redis", "Redis")):
-            st.markdown(f"{':material/check_circle:' if health.get(service) else ':material/error:'} {label}: "
-                        f"{'running' if health.get(service) else 'not running'}")
-        if not health["api"]:
-            st.warning("Start the API: `uv run uvicorn search_engine.api.app:app`")
-        elif not (health["elasticsearch"] and health["redis"]):
-            st.warning("Start the databases: `docker compose up -d`")
-
-        st.subheader("Add files")
-        uploads = st.file_uploader(
-            "Text, Markdown, PDF, CSV, JSON, XML, images or videos",
-            accept_multiple_files=True,
-            key=f"uploads_{state.upload_round}",  # a new key clears the uploader after an ingest
-        )
-        if st.button("Ingest", disabled=not uploads, type="primary"):
-            ingest(client, uploads)
-        if notice := state.pop("ingest_notice", None):
-            kind, text = notice
-            getattr(st, kind)(text)
-
+        if user := viewer():
+            st.markdown(f":material/person: Signed in as **{user['name']}**")
+        health = status_panel(client)
         files = load_files(client, health["api"])
-        st.subheader(f"Your files ({len(files)})")
-        if files:
-            st.dataframe(
-                [{"File": f["file_name"], "Passages": f["passages"], "Pictures": f["pictures"]} for f in files],
-                hide_index=True,
-            )
-        else:
-            st.caption("Nothing ingested yet.")
-        if st.button("Refresh list"):  # e.g. after ingesting from the command line
-            state.pop("files", None)
-            st.rerun()
+        files_table(files, "Documents")
 
         st.subheader("Search options")
         names = [f["file_name"] for f in files]
@@ -178,37 +150,6 @@ def sidebar(client: ApiClient) -> dict[str, Any]:
             state.session_id = uuid.uuid4().hex
             st.rerun()
     return {"filters": {name: values for name, values in filters.items() if values}, "top_k": top_k}
-
-
-def ingest(client: ApiClient, uploads: list[Any]) -> None:
-    state = st.session_state
-    with st.spinner(f"Ingesting {len(uploads)} file(s)... large PDFs and videos take a few minutes"):
-        try:
-            report = client.ingest([(upload.name, upload.getvalue()) for upload in uploads])
-        except ApiError as error:
-            state.ingest_notice = ("error", f"Ingest failed: {error}")
-            return
-    problems = [f"{name}: unsupported file type" for name in report["skipped"]]
-    problems += [f"{name}: {reason}" for name, reason in report["failed"].items()]
-    summary = f"Ingested {report['files']} file(s) into {report['chunks']} chunks."
-    if problems:
-        state.ingest_notice = ("warning", summary + " Not ingested: " + "; ".join(problems))
-    else:
-        state.ingest_notice = ("success", summary)
-    state.upload_round += 1
-    state.pop("files", None)  # reload the list
-    st.rerun()
-
-
-def load_files(client: ApiClient, api_up: bool) -> list[dict[str, Any]]:
-    """The ingested files, fetched once and again after each ingest (not on every keystroke)."""
-    state = st.session_state
-    if "files" not in state and api_up:
-        try:
-            state.files = client.files()
-        except ApiError:
-            return []
-    return state.get("files", [])
 
 
 main()

@@ -1,7 +1,11 @@
-# The whole project:  docker compose up -d --build   ->   http://localhost:8501
+# The whole project:  docker compose up -d --build   ->   http://localhost:8501 (on this machine only)
+# Shared over Tailscale:  docker compose --profile tailscale up -d --build   ->   https://search.<tailnet>.ts.net
 # Only the databases (to run the API and frontend with uv instead):  docker compose up -d elasticsearch redis
 #
-#   frontend (:8501) -> api (:8000) -> elasticsearch (:9200), redis (:6379), Groq / Gemini
+#   tailscale (:443 users, :8443 admins) -> frontend / admin -> api -> elasticsearch, redis, Groq / Gemini
+#
+# Every port below is bound to 127.0.0.1: reachable from this machine only, never from the network. People reach
+# the pages only through Tailscale, which serves just the two pages, and nothing else.
 
 # Fixed project name, so the volumes (indexes, caches, models) keep their names even if the folder is renamed
 name: aipoweredsearchengineusingmultimodalrag
@@ -15,7 +19,7 @@ services:
       - xpack.security.enabled=false        # no auth/TLS for local dev
       - ES_JAVA_OPTS=-Xms1g -Xmx1g          # cap the Java heap at 1 GB
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     mem_limit: 2g                           # heap + off-heap; keeps one container from taking Docker down
@@ -33,7 +37,7 @@ services:
       - REDIS_ARGS=--appendonly yes --appendfsync everysec
     stop_grace_period: 30s
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     mem_limit: 512m
@@ -52,7 +56,7 @@ services:
       - ES_URL=http://elasticsearch:9200
       - REDIS_URL=redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data                    # uploaded files, FAISS cache, eval results: kept, and visible on disk
       - model_cache:/models                 # bge, CLIP, cross encoder, Whisper: downloaded once, kept
@@ -76,7 +80,7 @@ services:
     environment:
       - API_URL=http://api:8000
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     depends_on:
       api:
         condition: service_healthy
@@ -87,7 +91,53 @@ services:
       timeout: 10s
       retries: 5
 
+  admin:
+    image: search-engine-frontend           # the same image as frontend, running the admin page
+    container_name: search-admin
+    command: ["streamlit", "run", "admin.py", "--server.address", "0.0.0.0", "--server.port", "8501", "--server.headless", "true"]
+    environment:
+      - API_URL=http://api:8000
+      - SEARCH_ADMINS=${SEARCH_ADMINS:-}    # Tailscale logins allowed on the admin page, comma-separated (.env)
+    ports:
+      - "127.0.0.1:8502:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started          # frontend builds the shared image
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # Joins your tailnet as the machine "search" and serves the two pages over HTTPS (tailscale/serve.json):
+  # https://search.<tailnet>.ts.net for questions, :8443 for the admin page. Started only with --profile tailscale.
+  tailscale:
+    image: tailscale/tailscale:v1.102.4
+    container_name: search-tailscale
+    hostname: search
+    profiles: ["tailscale"]
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:-}            # .env; a tagged auth key from the Tailscale admin console
+      - TS_EXTRA_ARGS=--advertise-tags=tag:search-engine
+      - TS_STATE_DIR=/var/lib/tailscale       # its identity, kept across restarts
+      - TS_USERSPACE=true                     # no kernel network device needed (works on Docker Desktop too)
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    mem_limit: 256m
+    restart: unless-stopped
+
 volumes:
+  tailscale_state:
   es_data:
   redis_data:
   model_cache:

@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 FRONTEND = Path(__file__).parents[3] / "frontend"
 sys.path.insert(0, str(FRONTEND))
 
+import shared  # noqa: E402
 from api_client import ApiError  # noqa: E402
 
 ANSWER = {
@@ -51,8 +52,8 @@ class FakeClient:
             "files": 1, "chunks": 2, "skipped": [], "failed": {}}
 
 
-def app(client: FakeClient) -> AppTest:
-    at = AppTest.from_file(str(FRONTEND / "app.py"), default_timeout=30)
+def app(client: FakeClient, page: str = "app.py") -> AppTest:
+    at = AppTest.from_file(str(FRONTEND / page), default_timeout=30)
     at.session_state["client"] = client
     at.run()
     assert not at.exception, [e.value for e in at.exception]
@@ -63,20 +64,35 @@ def texts(elements) -> str:
     return "\n".join(str(element.value) for element in elements)
 
 
-def test_page_shows_status_files_and_a_hint_before_the_first_question():
+def test_page_shows_status_documents_and_a_hint_before_the_first_question():
     at = app(FakeClient())
 
     assert at.title[0].value == "AI Search Engine"
     assert "Search API: running" in texts(at.sidebar.markdown) and "Redis: running" in texts(at.sidebar.markdown)
-    assert at.sidebar.subheader[2].value == "Your files (2)"
-    assert "Add files in the sidebar" in at.info[0].value
+    assert at.sidebar.subheader[1].value == "Documents (2)"
+    assert "Ask a question below" in at.info[0].value
 
 
-def test_when_the_api_is_down_the_page_says_how_to_start_it():
+def test_users_cannot_upload_documents():
+    at = app(FakeClient())
+
+    assert len(at.file_uploader) == 0 and len(at.sidebar.file_uploader) == 0
+    assert not [b for b in at.sidebar.button if b.label == "Ingest"]
+
+
+def test_the_tailscale_user_is_shown(monkeypatch):
+    monkeypatch.setattr(shared, "viewer", lambda: {"login": "asha@example.com", "name": "Asha Rao"})
+
+    at = app(FakeClient())
+
+    assert "Signed in as **Asha Rao**" in texts(at.sidebar.markdown)
+
+
+def test_when_the_engine_is_down_users_get_a_plain_notice():
     at = app(FakeClient(up=False))
 
     assert "Search API: not running" in texts(at.sidebar.markdown)
-    assert "uvicorn search_engine.api.app:app" in at.sidebar.warning[0].value
+    assert at.sidebar.warning[0].value == "The search engine is not fully running. Please try again later."
 
 
 def test_a_question_shows_the_answer_its_sources_eval_and_tools():
@@ -170,17 +186,3 @@ def test_llm_outage_and_other_errors_are_shown_in_the_chat():
     down.chat_input[0].set_value("q").run()
     assert "Can't reach the search engine API" in down.chat_message[1].error[0].value
     assert not down.exception
-
-
-def test_uploading_files_ingests_them_and_refreshes_the_file_list():
-    client = FakeClient()
-    at = app(client)
-    ingest_button = next(b for b in at.sidebar.button if b.label == "Ingest")
-    assert ingest_button.disabled  # nothing chosen yet
-
-    at.sidebar.file_uploader[0].upload("new_notes.txt", b"Goroutines are lightweight.", "text/plain").run()
-    next(b for b in at.sidebar.button if b.label == "Ingest").click().run()
-
-    assert client.ingested == [[("new_notes.txt", b"Goroutines are lightweight.")]]
-    assert at.sidebar.success[0].value == "Ingested 1 file(s) into 2 chunks."
-    assert at.sidebar.subheader[2].value == "Your files (3)"

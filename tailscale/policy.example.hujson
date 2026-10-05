@@ -1,0 +1,22 @@
+// Access policy for the search engine. Paste the "tagOwners" and "grants" parts into your tailnet's policy
+// (admin console -> Access controls), and put your own login in group:search-admins.
+{
+  "groups": {
+    // who may add documents (the admin page, port 8443); keep SEARCH_ADMINS in .env the same
+    "group:search-admins": ["you@example.com"],
+  },
+
+  "tagOwners": {
+    // the "search" machine is tagged, so it belongs to the tailnet, not to one person's account
+    "tag:search-engine": ["group:search-admins"],
+  },
+
+  "grants": [
+    // everyone in the tailnet may ask questions (the search page, port 443) ...
+    { "src": ["autogroup:member"], "dst": ["tag:search-engine"], "ip": ["443"] },
+    // ... and only admins may reach the admin page
+    { "src": ["group:search-admins"], "dst": ["tag:search-engine"], "ip": ["8443"] },
+    // keep your existing rules too, e.g. the default "everyone can reach everything they own":
+    { "src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"] },
+  ],
+}
