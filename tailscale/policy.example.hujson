@@ -3,7 +3,7 @@
 {
   "groups": {
     // who may add documents (the admin page, port 8443); keep SEARCH_ADMINS in .env the same
-    "group:search-admins": ["you@example.com"],
+    "group:search-admins": ["architchakraborty47@gmail.com"],
   },
 
   "tagOwners": {

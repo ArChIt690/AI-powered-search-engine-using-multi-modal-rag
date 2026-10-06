@@ -294,8 +294,9 @@ to the FastAPI API over HTTP and imports nothing from `search_engine`, so the mo
 - `frontend/app.py` (`uv run streamlit run frontend/app.py`): a chat (one session id per conversation, so
   follow-ups work); each answer shows where it came from (LLM / FAISS cache / Redis cache / blocked / no results),
   its sources (file, page or video time, snippet), the Eval scores, the tools used and the rewritten query; a
-  blocked answer shows the Guardrail's reason. Sidebar: status of the API, Elasticsearch and Redis; upload and
-  ingest files; the ingested files; filters and `top_k`; new conversation ✅
+  blocked answer shows the Guardrail's reason. No sidebar: "Signed in as" under the title, a warning only when
+  the search engine is down, "New conversation" below the chat; questions search all documents ✅
+- `frontend/admin.py` (admin page): upload and ingest files, the list of ingested documents; no sidebar ✅
 - API additions for it, `api/routes/ingest.py`: `POST /ingest` (uploads are saved in `data/landing/` under their
   bare file name and ingested; the same name replaces the old chunks) and `GET /files`
   (`ingestion/vector_store.file_counts`, shared with the `list_files` tool) ✅
@@ -320,7 +321,16 @@ redis` runs only the databases, for development with `uv`.
 - API image: two stages. `uv sync --frozen --no-dev` with the uv cache as a build cache mount (the old Spark image
   was 10 GB because that cache was baked in); dependencies installed before the source, so code changes rebuild in
   seconds; CPU-only PyTorch on Linux (`[tool.uv.sources]`); runs as a non-root user.
-- Start order by health checks: databases → `api` (`/health`) → `frontend`.
+- Start order by health checks: databases → `api` (`/health`) → `frontend`, `admin` → `tailscale`.
+- Every host port is bound to `127.0.0.1`: nothing is reachable from the network directly (checked on every
+  network address of the machine).
+- **Users vs admins:** `frontend/app.py` (search page) only asks questions; `frontend/admin.py` (admin page, same
+  image, service `admin`) adds documents. Uploads are no longer on the search page.
+- **Tailscale** (`--profile tailscale`): the `tailscale` container joins the tailnet as `search` (userspace mode,
+  state in the `tailscale_state` volume) and serves, over HTTPS and tailnet-only (`tailscale/serve.json`), the
+  search page on 443 and the admin page on 8443. Tailscale passes the visitor's login (`Tailscale-User-Login`);
+  the admin page allows only `SEARCH_ADMINS`. Optional network-level lock: `tailscale/policy.example.hujson` +
+  a tagged auth key (`TS_EXTRA_ARGS=--advertise-tags=tag:search-engine`).
 - Measured: API image 2.88 GB (PyTorch CPU alone is 769 MB; Streamlit moved to the dev group so it isn't in it),
   frontend 791 MB; first start ~8 min (model downloads into `model_cache`, 795 MB), later starts ~70 s; 9 files
   ingest in 7 s inside the container.

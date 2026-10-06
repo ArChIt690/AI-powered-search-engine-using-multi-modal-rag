@@ -59,4 +59,5 @@ def test_an_admin_uploads_documents_and_the_list_refreshes(monkeypatch):
 def test_the_admin_sees_how_to_fix_services_that_are_down():
     at = app(FakeClient(up=False), "admin.py")
 
-    assert at.sidebar.warning[0].value == "Start the services: `docker compose up -d`"
+    assert len(at.sidebar.children) == 0
+    assert at.warning[0].value == "Not running: Search API, Elasticsearch, Redis. Start the services: `docker compose up -d`"

@@ -1,5 +1,5 @@
-"""What the user page (app.py) and the admin page (admin.py) both show: who is signed in, service status and the
-list of ingested files."""
+"""What the search page (app.py) and the admin page (admin.py) share: who is signed in, a notice when the search
+engine is down, and the list of ingested files."""
 
 import os
 from typing import Any
@@ -36,15 +36,13 @@ def is_admin(user: dict[str, str] | None) -> bool:
     return user["login"].lower() in admin_logins()
 
 
-def status_panel(client: ApiClient, *, admin: bool = False) -> dict[str, bool]:
-    """Status of the API, Elasticsearch and Redis; users get a short notice, the admin the command to fix it."""
+def service_notice(client: ApiClient, *, admin: bool = False) -> dict[str, bool]:
+    """Nothing when the search engine is up; otherwise a warning (users: try later; the admin: how to start it)."""
     health = client.health()
-    st.subheader("Status")
-    for service, label in (("api", "Search API"), ("elasticsearch", "Elasticsearch"), ("redis", "Redis")):
-        up = health.get(service)
-        st.markdown(f"{':material/check_circle:' if up else ':material/error:'} {label}: {'running' if up else 'not running'}")
     if not all(health.values()):
-        st.warning("Start the services: `docker compose up -d`" if admin else
+        down = [label for service, label in (("api", "Search API"), ("elasticsearch", "Elasticsearch"),
+                                             ("redis", "Redis")) if not health.get(service)]
+        st.warning(f"Not running: {', '.join(down)}. Start the services: `docker compose up -d`" if admin else
                    "The search engine is not fully running. Please try again later.")
     return health
 

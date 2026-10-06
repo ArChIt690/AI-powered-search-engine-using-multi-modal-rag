@@ -7,13 +7,12 @@ the page.
 
 import time
 import uuid
-from pathlib import PurePosixPath
 from typing import Any
 
 import streamlit as st
 
 from api_client import ApiClient, ApiError
-from shared import files_table, load_files, status_panel, viewer
+from shared import service_notice, viewer
 
 SOURCES = {
     "llm": "Answered by the LLM",
@@ -22,15 +21,6 @@ SOURCES = {
     "guardrail_blocked": "Blocked by the guardrail",
     "no_results": "No matching documents",
 }
-MODALITIES = {
-    "text": "Text", "image": "Images", "video_transcript": "Video speech", "video_frame": "Video frames",
-}
-CONTENTS = {
-    "text": "Text", "table": "Tables", "record": "Records (CSV / JSON / XML)", "image": "Images",
-    "chart": "Charts", "frame": "Video frames",
-}
-
-
 def main() -> None:
     st.set_page_config(page_title="AI Search Engine", page_icon=":mag:", layout="wide")
     state = st.session_state
@@ -38,12 +28,15 @@ def main() -> None:
     state.setdefault("session_id", uuid.uuid4().hex)
     state.setdefault("messages", [])
 
-    options = sidebar(state.client)
-
     st.title("AI Search Engine")
-    st.caption("Ask questions about the company's documents: text, PDFs, tables, images and videos. Answers cite their sources.")
+    user = viewer()
+    st.caption(
+        "Ask questions about the company's documents: text, PDFs, tables, images and videos. Answers cite their sources."
+        + (f" Signed in as **{user['name']}**." if user else "")
+    )
+    service_notice(state.client)
     if not state.messages:
-        st.info("Ask a question below. The documents you can search are listed in the sidebar.")
+        st.info("Ask a question below.")
     for message in state.messages:
         show_message(message)
 
@@ -51,17 +44,23 @@ def main() -> None:
         user_message = {"role": "user", "content": question}
         state.messages.append(user_message)
         show_message(user_message)
-        reply = ask(state.client, question, state.session_id, options)
+        reply = ask(state.client, question, state.session_id)
         state.messages.append(reply)
         show_message(reply)
 
+    # below the conversation, so it appears as soon as there is one to clear
+    if state.messages and st.button("New conversation", icon=":material/add_comment:"):
+        state.messages = []
+        state.session_id = uuid.uuid4().hex
+        st.rerun()
 
-def ask(client: ApiClient, question: str, session_id: str, options: dict[str, Any]) -> dict[str, Any]:
+
+def ask(client: ApiClient, question: str, session_id: str) -> dict[str, Any]:
     """One question through the API; failures become a message in the chat, not a crash."""
     started = time.monotonic()
     with st.spinner("Searching the documents..."):
         try:
-            response = client.search(question, session_id, options["filters"], options["top_k"])
+            response = client.search(question, session_id)
         except ApiError as error:
             return {"role": "assistant", "error": str(error), "llm_down": error.status == 503}
     return {"role": "assistant", "response": response, "seconds": time.monotonic() - started}
@@ -122,34 +121,6 @@ def citation_label(citation: dict[str, Any]) -> str:
         seconds = int(citation["timestamp"])
         where = f", at {seconds // 60:02d}:{seconds % 60:02d}"
     return f"[{citation['number']}] {citation['file_name']}{where} ({citation['content']})"
-
-
-def sidebar(client: ApiClient) -> dict[str, Any]:
-    """Who is signed in, status, the searchable documents and the search options. Returns {"filters", "top_k"}."""
-    state = st.session_state
-    with st.sidebar:
-        if user := viewer():
-            st.markdown(f":material/person: Signed in as **{user['name']}**")
-        health = status_panel(client)
-        files = load_files(client, health["api"])
-        files_table(files, "Documents")
-
-        st.subheader("Search options")
-        names = [f["file_name"] for f in files]
-        types = sorted({PurePosixPath(name).suffix.lstrip(".").lower() for name in names if "." in name})
-        filters = {
-            "file_name": st.multiselect("Only these files", names),
-            "file_type": st.multiselect("Only these file types", types),
-            "modality": st.multiselect("Only this kind of content", list(MODALITIES), format_func=MODALITIES.get),
-            "content": st.multiselect("Only these parts", list(CONTENTS), format_func=CONTENTS.get),
-        }
-        top_k = st.slider("Passages given to the LLM", min_value=1, max_value=20, value=10)
-
-        if st.button("New conversation"):
-            state.messages = []
-            state.session_id = uuid.uuid4().hex
-            st.rerun()
-    return {"filters": {name: values for name, values in filters.items() if values}, "top_k": top_k}
 
 
 main()

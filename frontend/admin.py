@@ -8,7 +8,7 @@ Two locks keep users out: over Tailscale, the access policy lets only the admin 
 import streamlit as st
 
 from api_client import ApiClient, ApiError
-from shared import files_table, is_admin, load_files, status_panel, viewer
+from shared import files_table, is_admin, load_files, service_notice, viewer
 
 
 def main() -> None:
@@ -26,8 +26,7 @@ def main() -> None:
     st.title("Admin: documents")
     st.caption(f"Signed in as {user['name']}" if user else "Opened on the server itself (no Tailscale sign-in).")
 
-    with st.sidebar:
-        health = status_panel(state.client, admin=True)
+    health = service_notice(state.client, admin=True)
 
     st.subheader("Add documents")
     uploads = st.file_uploader(

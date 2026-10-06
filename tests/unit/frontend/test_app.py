@@ -64,20 +64,20 @@ def texts(elements) -> str:
     return "\n".join(str(element.value) for element in elements)
 
 
-def test_page_shows_status_documents_and_a_hint_before_the_first_question():
+def test_page_has_no_sidebar_and_shows_a_hint_before_the_first_question():
     at = app(FakeClient())
 
     assert at.title[0].value == "AI Search Engine"
-    assert "Search API: running" in texts(at.sidebar.markdown) and "Redis: running" in texts(at.sidebar.markdown)
-    assert at.sidebar.subheader[1].value == "Documents (2)"
-    assert "Ask a question below" in at.info[0].value
+    assert len(at.sidebar.children) == 0
+    assert at.info[0].value == "Ask a question below." and len(at.warning) == 0  # nothing is down
+    assert not [b for b in at.button if b.label == "New conversation"]  # nothing to clear yet
 
 
 def test_users_cannot_upload_documents():
     at = app(FakeClient())
 
-    assert len(at.file_uploader) == 0 and len(at.sidebar.file_uploader) == 0
-    assert not [b for b in at.sidebar.button if b.label == "Ingest"]
+    assert len(at.file_uploader) == 0
+    assert not [b for b in at.button if b.label == "Ingest"]
 
 
 def test_the_tailscale_user_is_shown(monkeypatch):
@@ -85,14 +85,13 @@ def test_the_tailscale_user_is_shown(monkeypatch):
 
     at = app(FakeClient())
 
-    assert "Signed in as **Asha Rao**" in texts(at.sidebar.markdown)
+    assert "Signed in as **Asha Rao**." in texts(at.caption)
 
 
 def test_when_the_engine_is_down_users_get_a_plain_notice():
     at = app(FakeClient(up=False))
 
-    assert "Search API: not running" in texts(at.sidebar.markdown)
-    assert at.sidebar.warning[0].value == "The search engine is not fully running. Please try again later."
+    assert at.warning[0].value == "The search engine is not fully running. Please try again later."
 
 
 def test_a_question_shows_the_answer_its_sources_eval_and_tools():
@@ -110,7 +109,7 @@ def test_a_question_shows_the_answer_its_sources_eval_and_tools():
     assert "Eval: faithfulness 5/5 · relevance 4/5 · citations 5/5 · passed" in captions and "Slightly terse." in captions
     labels = [expander.label for expander in at.chat_message[1].expander]
     assert labels == ["[1] report.pdf, page 1 (table)", "[2] review.mp4, at 01:15 (text)"]
-    assert client.searches[0]["query"] == "total revenue?" and client.searches[0]["top_k"] == 10
+    assert client.searches[0]["query"] == "total revenue?"
 
 
 def test_a_conversation_keeps_one_session_and_shows_every_turn():
@@ -130,26 +129,20 @@ def test_new_conversation_clears_the_chat_and_starts_another_session():
     at = app(client)
     at.chat_input[0].set_value("first").run()
 
-    next(b for b in at.sidebar.button if b.label == "New conversation").click().run()
+    next(b for b in at.button if b.label == "New conversation").click().run()
     at.chat_input[0].set_value("again").run()
 
     assert [m.name for m in at.chat_message] == ["user", "assistant"]
     assert client.searches[0]["session_id"] != client.searches[1]["session_id"]
 
 
-def test_filters_and_top_k_from_the_sidebar_are_sent_with_the_question():
+def test_questions_search_all_documents_with_the_default_settings():
     client = FakeClient()
     at = app(client)
 
-    at.sidebar.multiselect[0].set_value(["report.pdf"])
-    at.sidebar.multiselect[1].set_value(["pdf"])
-    at.sidebar.multiselect[3].set_value(["chart", "table"])
-    at.sidebar.slider[0].set_value(4)
     at.chat_input[0].set_value("q").run()
 
-    assert at.sidebar.multiselect[1].options == ["md", "pdf"]  # the types of the ingested files
-    assert client.searches[0]["filters"] == {"file_name": ["report.pdf"], "file_type": ["pdf"], "content": ["chart", "table"]}
-    assert client.searches[0]["top_k"] == 4
+    assert client.searches[0]["filters"] is None and client.searches[0]["top_k"] is None
 
 
 @pytest.mark.parametrize(

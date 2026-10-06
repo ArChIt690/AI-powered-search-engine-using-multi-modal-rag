@@ -121,7 +121,9 @@ services:
     profiles: ["tailscale"]
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY:-}            # .env; a tagged auth key from the Tailscale admin console
-      - TS_EXTRA_ARGS=--advertise-tags=tag:search-engine
+      # Optional: with the access policy in tailscale/policy.example.hujson applied, set
+      # TS_EXTRA_ARGS=--advertise-tags=tag:search-engine in .env (and use a tagged auth key)
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
       - TS_STATE_DIR=/var/lib/tailscale       # its identity, kept across restarts
       - TS_USERSPACE=true                     # no kernel network device needed (works on Docker Desktop too)
       - TS_SERVE_CONFIG=/config/serve.json
