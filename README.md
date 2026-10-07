@@ -51,45 +51,23 @@ cache), the tools the LLM used and its evaluation scores.*
 
 ## Architecture
 
-The full design is in [`docs/Search_Engine_Architecture.drawio`](docs/Search_Engine_Architecture.drawio); the
-code follows it box by box ([`Prompts/Build_order.md`](Prompts/Build_order.md) maps every box to a module).
+[![Architecture: ingestion pipeline, retrieval pipeline and LLM architecture](docs/images/architecture.png)](docs/images/architecture.png)
 
-```mermaid
-flowchart LR
-    subgraph Ingestion
-        F[Files: text, PDF, CSV/JSON/XML,<br/>images, video] --> X[Text extraction<br/>tables, charts, frames,<br/>Whisper transcript]
-        X --> C[Chunking<br/>smart + semantic]
-        C --> TE[Text embeddings<br/>bge]
-        X --> IE[Image embeddings<br/>CLIP]
-        TE --> M[Metadata enrichment]
-        IE --> M
-        M --> ES[(Elasticsearch<br/>vector DB)]
-    end
+*Click to enlarge. The source is [`docs/Search_Engine_Architecture.drawio`](docs/Search_Engine_Architecture.drawio)
+(open it in [diagrams.net](https://app.diagrams.net) or the VS Code Draw.io extension). The code follows it box by
+box; [`Prompts/Build_order.md`](Prompts/Build_order.md) maps every box to a module.*
 
-    subgraph Retrieval
-        Q[Question] --> QE[Query enhancement]
-        QE --> MF[Metadata filtering]
-        MF --> HS[Hybrid search<br/>BM25 + kNN + CLIP]
-        ES --> HS
-        HS --> RR[Rerank<br/>RRF + cross-encoder]
-        RR --> FC{FAISS<br/>semantic cache}
-        FC -- miss --> RC{Redis<br/>prompt cache}
-    end
+The diagram has three parts:
 
-    subgraph LLM["LLM architecture"]
-        RC -- miss --> AG[Agent<br/>tools + MCP]
-        AG --> GR{Guardrail}
-        GR -- safe --> EV[Eval judge]
-        EV --> R[Result + citations]
-        EV -.-> ER[(Eval results<br/>stored separately)]
-    end
-
-    FC -- hit --> A[Answer]
-    RC -- hit --> A
-    GR -- unsafe + reason --> A
-    R --> A
-    R -. passed .-> FC
-```
+- **Ingestion pipeline** — text documents, PDFs / XML / CSV / JSON, pictures and video go through text extraction
+  (PDF tables, charts and images separated; video audio transcribed, frames sampled), chunking, text embeddings
+  and CLIP image embeddings, then metadata enrichment into the vector database.
+- **Retrieval pipeline** — the user's query is enhanced, filtered by metadata and searched with Elasticsearch
+  hybrid search (BM25 keyword + semantic), reranked with rank fusion and a cross-encoder, then checked against the
+  FAISS semantic cache and the Redis prompt cache before the LLM is called. Sessional queries are kept in Redis.
+- **LLM architecture** — the LLM uses MCP and tools; its answer passes a guardrail (unsafe answers go back to the
+  user with the reason) and an eval step; the result goes for caching and is returned as the final result, and
+  every eval result is stored separately.
 
 **One question, step by step:** the question is rewritten to stand alone (using the session's history) and any
 filters it mentions are extracted → hybrid search runs over text and images → results are fused and reranked →
